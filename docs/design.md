@@ -1,8 +1,8 @@
 # go-dyson: the design
 
-Research into Dyson connected air purifiers, done on 2026-11-15 from public sources, to
-decide what a Go module for them would be. Nothing is built and nothing here was run
-against a purifier. The decisions at the end are open.
+Research into Dyson connected air purifiers, done on 2026-11-15 from public sources, and
+the module built from it. The module follows the reference implementation's code; nothing
+here was run against a purifier.
 
 In short: each purifier runs its own MQTT broker on the LAN, and with the purifier's
 credential a client reads its sensors and drives it there, with no cloud at run time. The
@@ -74,33 +74,82 @@ The earlier generations have none, and no HomeKit.
 | Gives | every sensor and control | the same |
 | Risk | firmware changes; the broker's connection fault | Dyson changing the account API |
 
-## What this module would be
+## What this module is
 
-Not decided. The options, most local first:
+**A client of the purifier's own broker**, for the Pure Cool Link, the TP02, product type
+475: the purifiers it was written for, which carry their Wi-Fi stickers. Local, with no
+account.
 
-1. **A client of the purifier's broker**: discovery over mDNS or a given address, the
-   state and sensors decoded by product code, the commands. The credential is
-   configuration, derived from the sticker by the command or fetched once from the account
-   by a login subcommand.
-2. **The cloud's MQTT**, the same messages over another transport, where a purifier
-   refuses local connections.
+- `dyson`: `FromSticker` makes a purifier's identity from the network name and the
+  password on its sticker. `Dial` connects; `State` and `Environment` ask for how it is
+  set and what its sensors read; `Next` reads what it says as it says it; `SetMode`,
+  `SetSpeed`, `SetOscillation`, `SetNightMode` and `SetSleepTimer` drive it.
+- `mqtt`: an MQTT client of this module's own design, and `mqtt/mqtttest`, a broker for
+  tests.
+- `dyson/dysontest`: a purifier for tests, on that broker.
+- `cmd/dyson`: the command, over `internal/cli`.
 
-[opendyson](https://github.com/libdyson-wg/opendyson) is Go, and does the login, the
-device list and listening on either transport; it sends no command.
+### Decisions
+
+- **The credential comes from the sticker**, and the sticker from the environment:
+  `DYSON_SSID` and `DYSON_WIFI_PASSWORD`. Nothing is asked of Dyson's cloud. The account
+  route, for a purifier with no sticker, is not built.
+- **Only the type 475 is spoken.** The reference implementation's file for the Link
+  generation was read, `dyson_pure_cool_link.py`: its state is `fmod`, `fnst`, `fnsp`,
+  `oson`, `nmod`, `rhtm`, `filf`. Later generations name their state otherwise; another
+  type is refused, with nothing sent.
+- **MQTT 3.1, as both implementations pin it**: libdyson-neon asks its library for
+  `MQTTv31`, and [opendyson](https://github.com/libdyson-wg/opendyson) sets Paho's
+  protocol version to 3. Whether a purifier takes MQTT 3.1.1 is not known.
+- **One connection a command, closed at its end.** The later models' brokers run out of
+  connections; nothing says the TP02's does not.
+- **A `Purifier` is for one goroutine.** What the purifier says arrives on one
+  subscription; `State`, `Environment` and `Next` all read it, and each passes over what
+  it did not ask for.
+- **A change returns when the broker took it**, at quality of service 1, as the
+  reference implementation publishes it. What the purifier then does, it says, and
+  `Next` reads.
+- **Not built**: finding purifiers by mDNS (`_dyson_mqtt._tcp`), the other product
+  types, the account route, the air quality target, the monitoring switch, resetting the
+  filter, heat.
+
+### MQTT, and the library under it
+
+- **This module speaks MQTT through an API of its own**, package `mqtt`, shaped for Go
+  and not after the library that carries the bytes. A `Conn` is one session over one
+  connection and is never dialled again behind its caller; every call takes a context
+  and returns when the broker has answered; messages are read from a `Subscription`, in
+  order, and a subscription nobody reads holds the connection back and loses nothing.
+  One whose grant did not come before its caller gave up is ended there, so that it
+  cannot. The package may become a module of its own.
+- **The bytes are carried by [Eclipse Paho](https://github.com/eclipse-paho/paho.mqtt.golang)**,
+  the one maintained Go client found that speaks MQTT 3.1. Package `mqtt` and its test
+  broker alone name it, a rule of `.lint-go.yaml` holds every other package to that, and
+  none of its types cross the API.
+- **Paho's license.** Its `LICENSE` offers it under the EPL-2.0 or the EDL-1.0, at the
+  taker's choice. The EDL-1.0 is the BSD-3-Clause's text, which this project accepts,
+  and it is the one Paho is taken under. The license lane reads the file as EPL-2.0
+  alone and is told to pass the module over, in `.lint-go.yaml`, with this reason.
+- The other Go clients looked at speak MQTT 3.1.1 or 5 only:
+  [at-wat/mqtt-go](https://github.com/at-wat/mqtt-go),
+  [natiu-mqtt](https://github.com/soypat/natiu-mqtt), and Eclipse's own
+  [paho.golang](https://github.com/eclipse-paho/paho.golang).
 
 ## Open questions
 
-- The model code of each purifier, on the label under its base (TP07, HP04 and the like):
-  it sets the product code and the keys.
-- Whether each has a Wi-Fi label with a network name and a password.
-- Whether the purifiers and the machine that runs the command are on one network, with
-  mDNS passing.
+- Whether the purifiers and the machine that runs the command are on one network. The
+  command takes an address, so mDNS need not pass.
 
 ## Not verified
 
-- Nothing above was observed on a purifier.
+- Nothing above was observed on a purifier, and the module was run against its own
+  stand-in only.
+- Whether a TP02 takes a second connection while the Dyson app holds one.
+- What a purifier answers a change it refuses: the reference implementation waits for
+  no answer.
 - The unit of the heating target, read as tenths of a kelvin by inference.
-- The Link generation's keys: the file that holds them was not read.
+- The particulates' and volatile compounds' units: the reference implementation calls
+  them "unknown unit".
 - Reports that some recent models refuse local connections, the Big+Quiet with
   formaldehyde sensing among them, give no cause.
 - What the MyDyson app itself sends on the LAN.
