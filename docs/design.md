@@ -125,6 +125,13 @@ account.
   package in standard types: mDNS's port is one to a host, and belongs to the program. An
   announcement proves nothing and carries no secret: the credential stays the sticker's.
   No TXT entry is read, since neither implementation reads one.
+- **The command shows a purifier's text and never obeys it.** An error code, a warning
+  and what the broker says in refusing are whatever the purifier, or whoever answers for
+  it, wrote. Every line the command prints goes through `internal/terminal`, which writes
+  out, as Go writes them in a string, each character a terminal would not simply draw: a
+  control or a direction mark, a line's end, a tab, a byte that is no text. A test reads
+  the command's source and fails on a line printed any other way, since no test of what
+  is printed could name every line there will be.
 - **Not built**: the search itself, in the command, which still takes an address; the
   other product types, the account route, the air quality target, the monitoring switch,
   resetting the filter, heat.

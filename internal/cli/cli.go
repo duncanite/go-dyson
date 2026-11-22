@@ -16,6 +16,7 @@ import (
 	"github.com/alecthomas/kong"
 
 	"github.com/duncanite/go-dyson/dyson"
+	"github.com/duncanite/go-dyson/internal/terminal"
 )
 
 // Exit statuses.
@@ -103,7 +104,7 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer, getenv fu
 		kong.BindTo(ctx, (*context.Context)(nil)),
 	)
 	if err != nil {
-		fmt.Fprintln(stderr, "dyson:", err)
+		terminal.Printf(stderr, "dyson: %s\n", err)
 
 		return ExitError
 	}
@@ -120,7 +121,7 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer, getenv fu
 	}
 
 	if err != nil {
-		fmt.Fprintln(stderr, "dyson:", err)
+		terminal.Printf(stderr, "dyson: %s\n", err)
 
 		return ExitError
 	}
@@ -192,7 +193,7 @@ func (*statusCommand) Run(ctx context.Context, root *rootCommand) error {
 		table := tabwriter.NewWriter(root.out, 0, 0, 1, ' ', 0)
 
 		for _, line := range append(settings(&state), readings(&environment)...) {
-			fmt.Fprintf(table, "%s:\t%s\n", line[0], line[1])
+			terminal.Printf(table, "%s:\t%s\n", line[0], line[1])
 		}
 
 		if err = table.Flush(); err != nil {
@@ -220,11 +221,11 @@ func settings(state *dyson.State) [][2]string {
 
 	// The codes are the purifier's own text.
 	if state.Error != "" {
-		lines = append(lines, [2]string{"error", fmt.Sprintf("%q", state.Error)})
+		lines = append(lines, [2]string{"error", state.Error})
 	}
 
 	if state.Warning != "" {
-		lines = append(lines, [2]string{"warning", fmt.Sprintf("%q", state.Warning)})
+		lines = append(lines, [2]string{"warning", state.Warning})
 	}
 
 	return lines
@@ -333,7 +334,7 @@ func (*watchCommand) Run(ctx context.Context, root *rootCommand) error {
 		update := dyson.Update{State: &state}
 
 		for err == nil {
-			fmt.Fprintf(root.out, "%s  %s\n", time.Now().Format(time.TimeOnly), line(update))
+			terminal.Printf(root.out, "%s  %s\n", time.Now().Format(time.TimeOnly), line(update))
 
 			update, err = purifier.Next(ctx)
 		}
