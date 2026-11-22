@@ -6,9 +6,8 @@ broker, and with the credential on its Wi-Fi sticker a client reads its state an
 sensors there, and drives its fan and its heater. No cloud, and no account for a purifier
 that carries its sticker.
 Written against the reference implementation the open projects share. Its search, its
-reads and some of its commands have been run against purifiers: the fan's speed and off
-on a Pure Cool Link, the speed, the oscillation and the heater's mode on a Pure
-Hot+Cool. The rest has not:
+reads and its commands have been run against purifiers: every command but `watch` on a
+Pure Hot+Cool, the fan's speed and off on a Pure Cool Link. The rest has not:
 [docs/design.md](docs/design.md) says what was read and what was seen.
 
 The command reads the purifier's sticker from the environment and takes it as no flag:

@@ -330,6 +330,23 @@ not heating, its target of 12.8 °C being under the room's 18.2 °C, and the fan
 still off. So the purifier takes the heater's mode as this module sends it, and says
 apart what it is set to and what it does.
 
+Then the rest of its commands were run on it, in three turns, each read back by
+`status`:
+
+- `heat off`, `on`, `heat 21`: half a minute later the fan was on at speed 2 and
+  turning, and the heater set to heat and heating, to 21.1 °C. A target of 21 °C is
+  294.15 kelvin, halfway between two tenths: it is sent as 2942, which is 21.05 °C. Every
+  whole degree Celsius falls so, and is printed a tenth above what was asked
+  ([issue 25](https://github.com/duncanite/go-dyson/issues/25)).
+- `auto`, `night off`, `timer 30m`: the fan was in auto and turning, night mode off, and
+  the sleep timer at 29 minutes.
+- `timer off`, `night on`, `heat 12.78`, `heat off`, `on`, `speed 2`, `off`: the purifier
+  was as it had been found, the fan off with a speed of 2 kept, night mode on, no timer,
+  and the heater off with its target at 12.8 °C, 55.0 °F, again.
+
+So every command this module has for the later generation was taken by a real purifier
+as it is sent, the auto mode sent with the power among them.
+
 ## Open questions
 
 - Whether the purifiers and the machine that runs the command are on one network. The
@@ -342,10 +359,9 @@ apart what it is set to and what it does.
   unasked: run against the module's own stand-in only.
 - What the account's API answers when it refuses, a code asked for too often among it:
   read off the reference implementation, and run against a stand-in of the API only.
-- The commands that change a purifier of type 527, but its speed, its oscillation and its
-  heater set to heat: its mode, its night mode, its timer, its heater set to heat no
-  more or to a target, and a heater that does heat; and what one says unasked. Read off
-  the reference implementation, and run against the module's own stand-in only.
+- What a purifier of type 527 says unasked, which `watch` prints: read off the reference
+  implementation, and run against the module's own stand-in only. So is what one takes
+  at either end of the heat target's range.
 - What a particulate reading of 999 is, and what the error `11E1` is: see [Observed on
   purifiers](#observed-on-purifiers).
 - Whether a TP02 takes a second connection while the Dyson app holds one.
