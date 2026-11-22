@@ -78,6 +78,53 @@ func connected(t *testing.T) (*dysontest.Purifier, *dyson.Purifier) {
 	return fake, purifier
 }
 
+// TestEnded: a Purifier says when its connection is over, and why, with
+// nothing read from it: nothing while it lives; mqtt.ErrLost when the
+// purifier went; mqtt.ErrClosed when it was closed.
+func TestEnded(t *testing.T) {
+	t.Parallel()
+
+	fake, purifier := connected(t)
+
+	select {
+	case <-purifier.Done():
+		t.Fatalf("a Purifier that lives is done: %v", purifier.Err())
+	default:
+	}
+
+	if err := purifier.Err(); err != nil {
+		t.Errorf("Err of a Purifier that lives = %v", err)
+	}
+
+	fake.Drop()
+
+	select {
+	case <-purifier.Done():
+	case <-soon(t).Done():
+		t.Fatal("a Purifier whose purifier went is not done")
+	}
+
+	if err := purifier.Err(); !errors.Is(err, mqtt.ErrLost) {
+		t.Errorf("Err after the purifier went = %v, want mqtt.ErrLost", err)
+	}
+
+	_, closed := connected(t)
+
+	if err := closed.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	select {
+	case <-closed.Done():
+	case <-soon(t).Done():
+		t.Fatal("a Purifier that was closed is not done")
+	}
+
+	if err := closed.Err(); !errors.Is(err, mqtt.ErrClosed) {
+		t.Errorf("Err after Close = %v, want mqtt.ErrClosed", err)
+	}
+}
+
 // TestSticker: a sticker's network name and password give the serial, the
 // type and the credential; a name that is no Dyson sticker's is
 // ErrSticker; an Identity shows nothing of its credential.
