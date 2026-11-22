@@ -184,7 +184,7 @@ func TestHeat(t *testing.T) {
 		want string
 	}{
 		{[]string{"heat", "warm"}, `"warm" is neither a temperature in Celsius, nor on, nor off`},
-		{[]string{"heat", "40"}, "a heat target of 40, outside 0.85 to 36.85 Celsius"},
+		{[]string{"heat", "40"}, "a heat target of 40, outside 0.8 to 36.8 Celsius"},
 	} {
 		out, errs, status := run(t, fake, warm(), row.args...)
 		if status != cli.ExitError || out != "" || !strings.Contains(errs, row.want) {

@@ -21,6 +21,7 @@ package dyson_test
 
 import (
 	"errors"
+	"fmt"
 	"math"
 	"reflect"
 	"testing"
@@ -116,8 +117,8 @@ func TestHotCoolReading(t *testing.T) {
 
 	if want := (dyson.State{
 		Mode: dyson.Fan, Running: true, Speed: 5, Oscillating: true, Monitoring: true, HEPA: new(95), Carbon: new(80),
-	}); !reflect.DeepEqual(state, want) || heat == nil || heat.On || heat.Heating || !near(heat.Target, 20.85) {
-		t.Errorf("State = %+v, heat %+v\nwant %+v, the heater off with a target of 20.85", state, heat, want)
+	}); !reflect.DeepEqual(state, want) || heat == nil || heat.On || heat.Heating || !near(heat.Target, 20.8) {
+		t.Errorf("State = %+v, heat %+v\nwant %+v, the heater off with a target of 20.8", state, heat, want)
 	}
 
 	environment, err := purifier.Environment(ctx)
@@ -153,8 +154,8 @@ func TestHotCoolReading(t *testing.T) {
 
 	if want := (dyson.State{
 		Mode: dyson.Auto, Oscillating: true, Monitoring: true, HEPA: new(3), Error: "11E1", Warning: "FLTR",
-	}); !reflect.DeepEqual(state, want) || heat == nil || !heat.On || !heat.Heating || !near(heat.Target, 24.85) {
-		t.Errorf("State in auto, heating = %+v, heat %+v\nwant %+v, heating to 24.85", state, heat, want)
+	}); !reflect.DeepEqual(state, want) || heat == nil || !heat.On || !heat.Heating || !near(heat.Target, 24.8) {
+		t.Errorf("State in auto, heating = %+v, heat %+v\nwant %+v, heating to 24.8", state, heat, want)
 	}
 
 	environment, err = purifier.Environment(ctx)
@@ -348,5 +349,66 @@ func TestNoHeater(t *testing.T) {
 	state, err := purifier.State(ctx)
 	if err != nil || state.Heat != nil || state.HEPA != nil || state.Carbon != nil {
 		t.Errorf("State of a Link = %+v, %v", state, err)
+	}
+}
+
+// TestAHeatTargetReadsBackAsSet: a target set to a tenth of a degree is
+// the target the purifier then says, the very number: at both ends of
+// the range, at whole degrees, and at tenths a float writes a hair
+// under. What the purifier holds is TargetHeld above it.
+func TestAHeatTargetReadsBackAsSet(t *testing.T) {
+	t.Parallel()
+
+	fake, purifier := hotCool(t)
+	ctx := soon(t)
+
+	for _, tenths := range []int{8, 9, 100, 199, 210, 250, 253, 287, 299, 301, 367, 368} {
+		set := float64(tenths) / 10
+
+		if err := purifier.SetHeatTarget(ctx, set); err != nil {
+			t.Fatalf("SetHeatTarget(%v): %v", set, err)
+		}
+
+		var read *float64
+
+		for read == nil {
+			update, err := purifier.Next(ctx)
+			if err != nil {
+				t.Fatalf("Next after SetHeatTarget(%v): %v", set, err)
+			}
+
+			if update.State != nil && update.State.Heat != nil {
+				read = update.State.Heat.Target
+			}
+		}
+
+		// The same number, not one near it.
+		if *read != set {
+			t.Errorf("a target set to %v reads back as %v", set, *read)
+		}
+
+		// A target is held in tenths of a kelvin: 273.15 above, and
+		// TargetHeld above that.
+		sent := fake.Received()
+		if held := sent[len(sent)-1].Data["hmax"]; held != fmt.Sprintf("%04d", tenths+2732) {
+			t.Errorf("a target of %v was sent as %s", set, held)
+		}
+	}
+
+	// What arithmetic left a billionth under 25.3 is 25.3 to whoever made
+	// it, and is sent as that tenth, not as the one below.
+	under := 25.3 - 1e-9
+
+	if err := purifier.SetHeatTarget(ctx, under); err != nil {
+		t.Fatal(err)
+	}
+
+	if sent := fake.Received(); sent[len(sent)-1].Data["hmax"] != "2985" {
+		t.Errorf("a target a hair under 25.3 was sent as %s", sent[len(sent)-1].Data["hmax"])
+	}
+
+	if dyson.TargetHeld != 0.05 || dyson.MinHeatTarget != 0.8 || dyson.MaxHeatTarget != 36.8 {
+		t.Errorf("the target's bounds and what is held above it: %v, %v, %v",
+			dyson.MinHeatTarget, dyson.MaxHeatTarget, dyson.TargetHeld)
 	}
 }

@@ -172,16 +172,26 @@ Wi-Fi sticker.
   as `CUST` every time; a purifier was seen to say a sweep of its own there, `0180`, and
   this module says back whatever it last said, so that turning changes nothing of how
   it turns.
-- **The heater's target is 274 to 310 kelvin, as the reference takes it**: 0.85 to
-  36.85 °C. It is sent in tenths of a kelvin and bounded in them, so a purifier set in
-  Fahrenheit, as one seen was, is given any whole degree of its own scale inside that.
-  What a purifier itself takes at either end was not run.
-- **The command prints a target as the degree it was set to.** A purifier holds a target
-  to the tenth of a kelvin, which no whole degree of either scale is: 21 °C is held as
-  21.05, and 55 °F as 54.95. A target that is the nearest a purifier can hold to a whole
-  degree, within half a tenth of a kelvin, is printed as that degree, in whichever scale
-  it is one; any other, and every temperature a sensor reads, is printed to the tenth as
-  it is. The library's `Heat.Target` is the purifier's own value, unchanged.
+- **The heater's target is 274 to 310 kelvin, as the reference takes it.** It is sent in
+  tenths of a kelvin and bounded in them, so a purifier set in Fahrenheit, as one seen
+  was, is given any whole degree of its own scale inside that. What a purifier itself
+  takes at either end was not run.
+- **A target set is the target read back.** A purifier holds a target to the tenth of a
+  kelvin, and 273.15 puts every such value halfway between two tenths of a degree
+  Celsius: 25 °C is held as 25.05. Read as it is held, a target comes back a hair off
+  what was set, and a controller shows its setpoint moving after every set. So
+  `Heat.Target` is the tenth of a degree below what is held, and `SetHeatTarget` sends a
+  tenth as the value that reads back as itself: set to 25.0, read 25.0, the very number.
+  `TargetHeld`, 0.05, is what the purifier holds above it, for whoever wants the
+  temperature itself; the range is 0.8 to 36.8 on that scale. A value finer than a
+  tenth is sent as the nearest tenth of a kelvin, a tie going up, which is how a whole
+  degree Fahrenheit gets the value a purifier set in Fahrenheit holds for it.
+- **The command prints a target as the degree it was set to.** It prints what the
+  purifier holds, in both scales, and no whole degree of either is a tenth of a kelvin:
+  21 °C is held as 21.05, and 55 °F as 54.95. A target that is the nearest a purifier
+  can hold to a whole degree, within half a tenth of a kelvin, is printed as that
+  degree, in whichever scale it is one; any other, and every temperature a sensor
+  reads, is printed to the tenth as it is.
 - **What a purifier says can be read whole.** This module reads the fields it knows, and
   a purifier says more, and may say a known thing under a name this module reads
   second: it took a program written aside to see that one sends its particulates under
