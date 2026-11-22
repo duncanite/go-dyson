@@ -90,6 +90,9 @@ account.
   set and what its sensors read; `Next` reads what it says as it says it; `SetMode`,
   `SetSpeed`, `SetOscillation`, `SetNightMode` and `SetSleepTimer` drive it; `Done` and
   `Err` say when the connection ended, and why.
+- `dyson/account`: the identity of each purifier of a Dyson account, fetched with a
+  login by a one-time code: what a sticker would have given, for a purifier that has
+  none. `dyson/account/accounttest` is the account API for tests.
 - `mqtt`: an MQTT client of this module's own design, and `mqtt/mqtttest`, a broker for
   tests.
 - `dyson/dysontest`: a purifier for tests, on that broker.
@@ -99,8 +102,37 @@ account.
 ### Decisions
 
 - **The credential comes from the sticker**, and the sticker from the environment:
-  `DYSON_SSID` and `DYSON_WIFI_PASSWORD`. Nothing is asked of Dyson's cloud. The account
-  route, for a purifier with no sticker, is not built.
+  `DYSON_SSID` and `DYSON_WIFI_PASSWORD`. Nothing is asked of Dyson's cloud for a purifier
+  that has one.
+- **A purifier with no sticker is asked of the account, once.** Models since about 2020
+  carry no Wi-Fi sticker, and the open implementations know no other source for their
+  credential than the owner's account: neither uses a code printed on a label, nor
+  Bluetooth. `dyson/account` does the app's own login, as
+  [libdyson-neon's account client](https://github.com/libdyson-wg/libdyson-neon/blob/28063efd190c690e624f96bc214b6fc2dd4c6489/libdyson/cloud/account.py)
+  does it: a first request the API wants before any other, the account's status, a code
+  Dyson sends by mail against a challenge, then the code, the challenge and the
+  account's password for a bearer token, and the device list under it. Each device's
+  local credential is base64 of AES-256 in CBC mode under a key and a vector that are
+  the same for every device and published
+  ([its decryption](https://github.com/libdyson-wg/libdyson-neon/blob/28063efd190c690e624f96bc214b6fc2dd4c6489/libdyson/cloud/utils.py)),
+  of JSON that holds the broker's password. The package keeps nothing and writes
+  nothing; its challenge, its session and its errors show no address, password, code,
+  token or credential. A device of the list that does not read, a credential that does
+  not decrypt among them, is left out and said, and the others are given: the reference
+  does the same, and one device Dyson writes otherwise is not to hide a purifier. With
+  no client given it follows no redirect, which would carry the login's body, the
+  password in it, to wherever it pointed. A device's type is the list's, with its variant's letter for the
+  generations that have variants; the reference also reads a variant out of the
+  firmware's version when the list gives none, and this does not.
+- **The command takes an identity that is no sticker's from the environment too**:
+  `DYSON_SERIAL`, `DYSON_TYPE` and `DYSON_CREDENTIAL`, all three or none. Its `account`
+  command reads the account from `DYSON_ACCOUNT_EMAIL`, `DYSON_ACCOUNT_PASSWORD` and
+  `DYSON_ACCOUNT_COUNTRY`, asks for the code where it is typed, and prints each
+  purifier's three values: they have to cross to the environment by a person's hand,
+  since nothing here writes a file, and what is printed opens the purifiers. Every
+  run has Dyson send a code, which it refuses to do too often. `--timeout` bounds what
+  is asked of Dyson, before the code and after it, and what is typed where the code goes
+  is read no further than a code may be.
 - **Only the type 475 is spoken.** The reference implementation's file for the Link
   generation was read, `dyson_pure_cool_link.py`: its state is `fmod`, `fnst`, `fnsp`,
   `oson`, `nmod`, `rhtm`, `filf`. Later generations name their state otherwise; another
@@ -149,8 +181,9 @@ account.
   `--host` the same credential goes in the clear to the address given, so the search
   adds who may be sent it and not how it is sent; a network nobody else is on is what
   both rest on.
-- **Not built**: the other product types, the account route, the air quality target, the
-  monitoring switch, resetting the filter, heat.
+- **Not built**: the other product types, the air quality target, the monitoring switch,
+  resetting the filter, heat; the account API of mainland China, which is another host
+  and logs in by a telephone number.
 
 ### MQTT, and the library under it
 
@@ -206,6 +239,14 @@ broker takes is one the purifier obeys, for the fan's mode and its speed.
 
 Nothing was said to the one of type 527.
 
+The same day the command's `account` was run once against the account those two
+purifiers are registered to: Dyson's API took the login as `dyson/account` makes it, the
+code it sent by mail was typed, and the list came back with two devices, each with a
+serial and a credential that decrypted. `status` was then run with the three values the
+list gave for the purifier of type 475, in place of its sticker: its broker took them,
+and its state and sensors were read as before. So the credential the account gives is
+the one the sticker gives.
+
 ## Open questions
 
 - Whether the purifiers and the machine that runs the command are on one network. The
@@ -216,6 +257,10 @@ Nothing was said to the one of type 527.
 
 - `on`, `auto`, `oscillate`, `night` and `timer`, `watch`, and what a purifier says
   unasked: run against the module's own stand-in only.
+- What the account's API answers when it refuses, a code asked for too often among it:
+  read off the reference implementation, and run against a stand-in of the API only.
+  The credential the account gives for the purifier of type 527 was not tried: this
+  module does not speak that type yet.
 - Whether a TP02 takes a second connection while the Dyson app holds one.
 - What a purifier answers a change it refuses: the reference implementation waits for
   no answer.

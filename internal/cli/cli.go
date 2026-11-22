@@ -1,8 +1,10 @@
 // Package cli is the dyson command: what a Pure Cool Link purifier on the
 // LAN says of itself and of the air, and the commands that drive its fan.
 // The purifier's sticker, its network name and its Wi-Fi password, comes
-// from the environment and from nowhere else. Its address is given, or
-// the purifier the sticker names is searched for on the network.
+// from the environment and from nowhere else; a purifier with no sticker
+// has its identity there in its place, fetched once from the Dyson account.
+// Its address is given, or the purifier named is searched for on the
+// network.
 package cli
 
 import (
@@ -10,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -18,6 +21,7 @@ import (
 	"github.com/forkcloser/go-mdns/transport"
 
 	"github.com/duncanite/go-dyson/dyson"
+	"github.com/duncanite/go-dyson/dyson/account"
 	"github.com/duncanite/go-dyson/internal/terminal"
 )
 
@@ -33,6 +37,22 @@ const (
 	EnvPassword = "DYSON_WIFI_PASSWORD" // #nosec G101 -- the name of an environment variable, not a credential
 )
 
+// The environment variables the identity of a purifier with no sticker is
+// read from: what the account command prints for it.
+const (
+	EnvSerial     = "DYSON_SERIAL"
+	EnvType       = "DYSON_TYPE"
+	EnvCredential = "DYSON_CREDENTIAL" // #nosec G101 -- the name of an environment variable, not a credential
+)
+
+// The environment variables the account command reads the Dyson account
+// from.
+const (
+	EnvAccountEmail    = "DYSON_ACCOUNT_EMAIL"
+	EnvAccountPassword = "DYSON_ACCOUNT_PASSWORD" // #nosec G101 -- the name of an environment variable, not a credential
+	EnvAccountCountry  = "DYSON_ACCOUNT_COUNTRY"
+)
+
 // errUsage is a command line, or an environment, the command cannot act
 // on.
 var errUsage = errors.New("cannot run")
@@ -46,6 +66,8 @@ type exitStatus int
 type Environment struct {
 	// Args is its arguments, without its name.
 	Args []string
+	// In is where it reads what is typed: the code Dyson sends by mail.
+	In io.Reader
 	// Out and Err are where it writes.
 	Out io.Writer
 	Err io.Writer
@@ -53,6 +75,9 @@ type Environment struct {
 	Getenv func(string) string
 	// Network is where purifiers are searched for; nil is the host's own.
 	Network transport.Network
+	// Account is where the Dyson account's API is, and what reaches it;
+	// the zero value is Dyson's own. Its country is the environment's.
+	Account account.Options
 }
 
 type rootCommand struct {
@@ -62,6 +87,7 @@ type rootCommand struct {
 	Timeout   time.Duration `default:"15s"         help:"How long to wait for the purifier, its search included, for every command but watch."`
 
 	Discover  discoverCommand  `cmd:"" help:"Print the purifiers that announce themselves on this network. Needs no sticker."`
+	Account   accountCommand   `cmd:"" help:"Fetch from the Dyson account the identity of each of its purifiers: what a purifier with no sticker is opened with."`
 	Status    statusCommand    `cmd:"" help:"Print how the purifier is set and what its sensors read."`
 	On        onCommand        `cmd:"" help:"Turn the fan on, at the speed it had."`
 	Off       offCommand       `cmd:"" help:"Turn the fan off."`
@@ -72,8 +98,12 @@ type rootCommand struct {
 	Timer     timerCommand     `cmd:"" help:"Have the purifier turn itself off after a time."`
 	Watch     watchCommand     `cmd:"" help:"Print what the purifier says as it says it, until interrupted."`
 
+	in       io.Reader
 	out      io.Writer
+	err      io.Writer
+	getenv   func(string) string
 	network  transport.Network
+	api      account.Options
 	identity dyson.Identity
 }
 
@@ -83,6 +113,7 @@ type toggle struct {
 
 type (
 	discoverCommand  struct{}
+	accountCommand   struct{}
 	statusCommand    struct{}
 	onCommand        struct{}
 	offCommand       struct{}
@@ -111,12 +142,16 @@ func Run(ctx context.Context, env Environment) (status int) {
 		}
 	}()
 
-	root := rootCommand{out: env.Out, network: env.Network}
+	root := rootCommand{
+		in: env.In, out: env.Out, err: env.Err, getenv: env.Getenv, network: env.Network, api: env.Account,
+	}
 
 	parser, err := kong.New(&root,
 		kong.Name("dyson"),
 		kong.Description("Read and drive a Dyson Pure Cool Link purifier on the LAN. Its sticker is read from "+
-			EnvSSID+", the network name printed on it, and "+EnvPassword+", the password beside it."),
+			EnvSSID+", the network name printed on it, and "+EnvPassword+", the password beside it. "+
+			"A purifier with no sticker is named by "+EnvSerial+", "+EnvType+" and "+EnvCredential+
+			", which the account command prints."),
 		kong.UsageOnError(),
 		kong.Writers(env.Out, env.Err),
 		kong.Exit(func(code int) { panic(exitStatus(code)) }),
@@ -135,9 +170,10 @@ func Run(ctx context.Context, env Environment) (status int) {
 		return ExitError
 	}
 
-	// What is on the network is anyone's to hear: discover asks for no
-	// sticker.
-	if kctx.Command() != "discover" {
+	// What is on the network is anyone's to hear, and the account is asked
+	// for what a sticker would give: neither asks for a purifier's
+	// identity.
+	if command := kctx.Command(); command != "discover" && command != "account" {
 		err = root.identify(env.Getenv)
 	}
 
@@ -154,10 +190,33 @@ func Run(ctx context.Context, env Environment) (status int) {
 	return ExitOK
 }
 
-// identify reads the sticker from the environment; what is not set is
-// said by its variable's name.
+// identify reads the purifier's identity from the environment: the three
+// values the account gives when any of them is set, and the sticker
+// otherwise. What is not set is said by its variable's name.
 func (root *rootCommand) identify(getenv func(string) string) error {
 	var missing []string
+
+	given := dyson.Identity{Serial: getenv(EnvSerial), Type: getenv(EnvType), Credential: getenv(EnvCredential)}
+	if given != (dyson.Identity{}) {
+		for name, value := range map[string]string{
+			EnvSerial: given.Serial, EnvType: given.Type, EnvCredential: given.Credential,
+		} {
+			if value == "" {
+				missing = append(missing, name)
+			}
+		}
+
+		if len(missing) > 0 {
+			slices.Sort(missing)
+
+			return fmt.Errorf("%w: not set in the environment, with the others of the three: %s",
+				errUsage, strings.Join(missing, ", "))
+		}
+
+		root.identity = given
+
+		return nil
+	}
 
 	for _, name := range []string{EnvSSID, EnvPassword} {
 		if getenv(name) == "" {
@@ -166,7 +225,8 @@ func (root *rootCommand) identify(getenv func(string) string) error {
 	}
 
 	if len(missing) > 0 {
-		return fmt.Errorf("%w: not set in the environment: %s", errUsage, strings.Join(missing, ", "))
+		return fmt.Errorf("%w: not set in the environment: %s; or, for a purifier with no sticker, %s, %s and %s",
+			errUsage, strings.Join(missing, ", "), EnvSerial, EnvType, EnvCredential)
 	}
 
 	identity, err := dyson.FromSticker(getenv(EnvSSID), getenv(EnvPassword))
