@@ -8,9 +8,10 @@
 // what was read there. Only the Link generation's product type 475 is
 // spoken: later generations name their state otherwise.
 //
-// A Purifier is one connection, and it is for one goroutine at a time:
-// what the purifier says arrives on one subscription, which State,
-// Environment and Next all read.
+// A Purifier is one connection, and its methods may be called from several
+// goroutines: one waits in Next for what the purifier says while others
+// set it. What the purifier says arrives on one subscription, which Next,
+// State and Environment all read, one of them at a time.
 package dyson
 
 import (
@@ -24,6 +25,7 @@ import (
 	"log/slog"
 	"net"
 	"regexp"
+	"sync"
 	"time"
 
 	"github.com/duncanite/go-dyson/mqtt"
@@ -153,19 +155,42 @@ func FromSticker(ssid, password string) (Identity, error) {
 	}, nil
 }
 
-// Purifier is a connection to one purifier. It is for one goroutine at a
-// time, but for Done and Err, which any goroutine may call.
+// Purifier is a connection to one purifier. Its methods may be called
+// from several goroutines.
+//
+// What the purifier says is one stream, and each thing said goes to one
+// reader: a goroutine in Next takes the answers that State and
+// Environment, called from another, wait for. A consumer that watches
+// calls Ask and reads the two answers from Next.
 type Purifier struct {
 	conn    *mqtt.Conn
 	said    *mqtt.Subscription
 	command string
 	speaks  generation
 
+	// reading is held by the one goroutine that reads what the purifier
+	// says. It is a channel so that a wait for it ends with a context.
+	reading chan struct{}
+
+	mu sync.Mutex
 	// swing is how the purifier last wrote its oscillation, preset the
 	// sweep it said it was set to, and low and high the angles it turns
 	// between: what the generation after the Link's has to be told back
 	// to turn. Empty until a state was read.
 	swing, preset, low, high string
+	// told is closed once a state was read: it said how the purifier
+	// writes its oscillation, or that it writes none.
+	told  chan struct{}
+	knows bool
+	// kept is what SetOscillation read while it waited for a state, and
+	// Next has not given yet.
+	kept []saying
+}
+
+// saying is one thing read of what the purifier says: what Next returns.
+type saying struct {
+	update Update
+	err    error
 }
 
 // Dial connects to the purifier at host, an address with or without a
@@ -206,7 +231,10 @@ func Dial(ctx context.Context, host string, identity Identity) (*Purifier, error
 		return nil, fmt.Errorf("the purifier %s: %w", identity.Serial, err)
 	}
 
-	return &Purifier{conn: conn, said: said, command: topics + "/command", speaks: speaks}, nil
+	return &Purifier{
+		conn: conn, said: said, command: topics + "/command", speaks: speaks,
+		reading: make(chan struct{}, 1), told: make(chan struct{}),
+	}, nil
 }
 
 // Close ends the connection.
@@ -277,34 +305,31 @@ type Update struct {
 // sensors' readings, which it sends when asked and from time to time. A
 // message of another kind is passed over. One that is not in the shape the
 // reference implementation reads is ErrAnswer, and comes whole with it.
+//
+// A Next that ends with ctx has taken nothing: the next call gives what
+// it would have. Called from several goroutines, each thing said goes to
+// one of them.
 func (p *Purifier) Next(ctx context.Context) (Update, error) {
-	for {
-		message, err := p.said.Next(ctx)
-		if err != nil {
-			return Update{}, fmt.Errorf("the purifier: %w", err)
-		}
-
-		var heard report
-		if err = json.Unmarshal(message.Payload, &heard); err != nil {
-			return Update{Whole: message.Payload}, fmt.Errorf("%w: %w", ErrAnswer, err)
-		}
-
-		switch heard.Message {
-		case currentState, stateChange:
-			state, err := heard.state(p.speaks)
-			if err != nil {
-				return Update{Whole: message.Payload}, err
-			}
-
-			p.remember(&heard)
-
-			return Update{State: &state, Whole: message.Payload}, nil
-		case sensorData:
-			environment := heard.environment(p.speaks)
-
-			return Update{Environment: &environment, Whole: message.Payload}, nil
-		}
+	select {
+	case p.reading <- struct{}{}:
+		defer func() { <-p.reading }()
+	case <-ctx.Done():
+		return Update{}, fmt.Errorf("the purifier: waiting to read: %w", context.Cause(ctx))
 	}
+
+	p.mu.Lock()
+
+	if len(p.kept) > 0 {
+		first := p.kept[0]
+		p.kept = p.kept[1:]
+		p.mu.Unlock()
+
+		return first.update, first.err
+	}
+
+	p.mu.Unlock()
+
+	return p.read(ctx)
 }
 
 // Ask has the purifier say its state and what its sensors read, and waits
@@ -352,6 +377,38 @@ func (p *Purifier) Environment(ctx context.Context) (Environment, error) {
 
 		if update.Environment != nil {
 			return *update.Environment, nil
+		}
+	}
+}
+
+// read takes the next thing the purifier says off the subscription. The
+// caller holds reading.
+func (p *Purifier) read(ctx context.Context) (Update, error) {
+	for {
+		message, err := p.said.Next(ctx)
+		if err != nil {
+			return Update{}, fmt.Errorf("the purifier: %w", err)
+		}
+
+		var heard report
+		if err = json.Unmarshal(message.Payload, &heard); err != nil {
+			return Update{Whole: message.Payload}, fmt.Errorf("%w: %w", ErrAnswer, err)
+		}
+
+		switch heard.Message {
+		case currentState, stateChange:
+			state, err := heard.state(p.speaks)
+			if err != nil {
+				return Update{Whole: message.Payload}, err
+			}
+
+			p.remember(&heard)
+
+			return Update{State: &state, Whole: message.Payload}, nil
+		case sensorData:
+			environment := heard.environment(p.speaks)
+
+			return Update{Environment: &environment, Whole: message.Payload}, nil
 		}
 	}
 }

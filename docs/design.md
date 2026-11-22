@@ -197,9 +197,16 @@ Wi-Fi sticker.
   protocol version to 3. Whether a purifier takes MQTT 3.1.1 is not known.
 - **One connection a command, closed at its end.** The later models' brokers run out of
   connections; nothing says the TP02's does not.
-- **A `Purifier` is for one goroutine.** What the purifier says arrives on one
-  subscription; `State`, `Environment` and `Next` all read it, and each passes over what
-  it did not ask for.
+- **A `Purifier` is set from one goroutine while another reads it.** A consumer that
+  watches waits in `Next`, and what it is asked to change arrives on other goroutines:
+  every method may be called from several. What the purifier says is one stream, read
+  by one caller at a time, each thing said going to one reader; a `Next` that ends with
+  its context has taken nothing. `State` and `Environment` read the same stream, so a
+  consumer in `Next` calls `Ask` and takes the answers there. The later generation is
+  told to turn in the words its state was last written in: when it has said no state
+  yet, `SetOscillation` asks for one and waits until it is read, by whoever is in
+  `Next`, or by itself when nobody is, and what it read then is still `Next`'s to give:
+  a state is not lost to a watcher because a command came between two of its reads.
 - **A `Purifier` says that its connection ended; it never connects again by itself.**
   `Done` and `Err` are the connection's own, for a caller that only sends a command from
   time to time and would otherwise hold a dead connection until its next one failed. A
