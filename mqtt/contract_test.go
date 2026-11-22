@@ -39,6 +39,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -295,6 +296,27 @@ func TestSubscriptions(t *testing.T) {
 		t.Errorf("Subscribe to a filter the broker refuses = %v, want ErrRefused", err)
 	}
 
+	// A refused subscription is nobody's to read and holds nothing: what
+	// a broker sends on it all the same, more than a subscription keeps,
+	// does not hold the connection back; and its filter is given back,
+	// to be asked for again and refused again.
+	for range 2 * mqtt.DefaultBuffer {
+		broker.Push(mqtt.Message{Topic: "forbidden/x", Payload: []byte("unasked")})
+	}
+
+	// Once this is read, what was sent ahead of it is in, and dropped:
+	// the filter is not asked for again with messages still on their way
+	// to it.
+	broker.Publish(mqtt.Message{Topic: "a/b", Payload: []byte("through")})
+
+	if got := read(ctx, t, sub); string(got.Payload) != "through" {
+		t.Fatalf("after what a refused subscription was sent, the subscription held read %+v", got)
+	}
+
+	if _, err = conn.Subscribe(ctx, "forbidden/#", mqtt.AtMostOnce); !errors.Is(err, mqtt.ErrRefused) {
+		t.Errorf("Subscribe again to a filter the broker refused = %v, want ErrRefused", err)
+	}
+
 	broker.Publish(mqtt.Message{Topic: "a/b", Payload: []byte("before")})
 
 	// Once the marker is read the message before it is in: the connection
@@ -377,9 +399,10 @@ func TestOverlap(t *testing.T) {
 }
 
 // TestGivenUp: a subscription whose grant did not come in time is nobody's
-// to read. When the broker grants it after all, what it sends there holds
-// nothing back: the subscriptions the caller does hold go on receiving,
-// and the filter can be asked for again.
+// to read. What the broker sent on it meanwhile, and what it sends there
+// when it grants it after all, holds nothing back: the subscriptions the
+// caller does hold go on receiving, the broker is told, and the filter can
+// be asked for again.
 func TestGivenUp(t *testing.T) {
 	t.Parallel()
 
@@ -394,6 +417,22 @@ func TestGivenUp(t *testing.T) {
 
 	grant := broker.Hold()
 
+	// While its grant is held back the broker sends on the filter all the
+	// same, as it may, and more than a subscription keeps: what nobody
+	// reads holds the connection until the subscription is given up on,
+	// and no longer.
+	early := make(chan struct{})
+
+	go func() {
+		defer close(early)
+
+		time.Sleep(20 * time.Millisecond)
+
+		for range 64 {
+			broker.Push(mqtt.Message{Topic: "b/x", Payload: []byte("early")})
+		}
+	}()
+
 	brief, cancel := context.WithTimeout(ctx, 100*time.Millisecond)
 	defer cancel()
 
@@ -401,6 +440,7 @@ func TestGivenUp(t *testing.T) {
 		t.Fatalf("Subscribe with its grant held back = %v, want the deadline", err)
 	}
 
+	<-early
 	grant()
 
 	// More than the buffer holds, on the filter given up on, from a broker
@@ -419,6 +459,16 @@ func TestGivenUp(t *testing.T) {
 		t.Errorf("Err after a subscription was given up on = %v", conn.Err())
 	}
 
+	// The broker was told: once it has read on, it holds the filter no
+	// more.
+	for deadline := time.Now().Add(5 * time.Second); slices.Contains(broker.Filters(), "b/#"); {
+		if time.Now().After(deadline) {
+			t.Fatalf("the broker still holds %v after a subscription was given up on", broker.Filters())
+		}
+
+		time.Sleep(time.Millisecond)
+	}
+
 	go grant()
 
 	again, err := conn.Subscribe(ctx, "b/#", mqtt.AtMostOnce)
@@ -430,6 +480,78 @@ func TestGivenUp(t *testing.T) {
 
 	if got := read(ctx, t, again); string(got.Payload) != "anew" {
 		t.Errorf("the filter asked for again read %q", got.Payload)
+	}
+}
+
+// TestGivenUpAndTakenAgain: a filter given up on can be asked for again
+// the moment it is given back, by another goroutine, and the subscription
+// that goroutine then holds is the one the broker keeps: the word that
+// the first was given up on reaches the broker ahead of the new one, and
+// never takes it away.
+func TestGivenUpAndTakenAgain(t *testing.T) {
+	t.Parallel()
+
+	broker := started(t)
+	conn := dialled(t, broker, mqtt.Options{})
+	ctx := soon(t)
+	grant := broker.Hold()
+
+	for round := range 100 {
+		taken := make(chan *mqtt.Subscription, 1)
+
+		// Another goroutine asks for the filter again and again, and has
+		// it the moment it is given back.
+		go func() {
+			for {
+				sub, err := conn.Subscribe(ctx, "b/#", mqtt.AtMostOnce)
+				if errors.Is(err, mqtt.ErrArgument) {
+					continue
+				}
+
+				if err != nil {
+					t.Errorf("round %d: Subscribe to the filter given back = %v", round, err)
+				}
+
+				taken <- sub
+
+				return
+			}
+		}()
+
+		brief, cancel := context.WithTimeout(ctx, time.Millisecond)
+
+		_, err := conn.Subscribe(brief, "b/#", mqtt.AtMostOnce)
+
+		cancel()
+
+		// The other goroutine may have been the first to ask: then this
+		// one was refused the filter, and there is nothing given up on.
+		lost := errors.Is(err, mqtt.ErrArgument)
+		if !lost && !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("round %d: Subscribe with its grant held back = %v, want the deadline", round, err)
+		}
+
+		// The grant of the one given up on, then of the one taken again.
+		if !lost {
+			grant()
+		}
+
+		grant()
+
+		again := <-taken
+		if again == nil {
+			t.FailNow()
+		}
+
+		broker.Publish(mqtt.Message{Topic: "b/x", Payload: []byte(strconv.Itoa(round))})
+
+		if got := read(ctx, t, again); string(got.Payload) != strconv.Itoa(round) {
+			t.Fatalf("round %d: the filter taken again read %q", round, got.Payload)
+		}
+
+		if err = again.Unsubscribe(ctx); err != nil {
+			t.Fatalf("round %d: Unsubscribe: %v", round, err)
+		}
 	}
 }
 
