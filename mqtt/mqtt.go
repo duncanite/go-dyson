@@ -104,7 +104,8 @@ var (
 // The password is a secret: an Options formatted, logged or marshalled as
 // JSON shows what it is and not that. One kept in an unexported field of
 // another struct is out of reach of these methods, and fmt prints it as it
-// is.
+// is. What it marshals to is for a reader and does not read back: an
+// Options is made in code, not kept in a file.
 type Options struct {
 	// Address is the broker's host and port.
 	Address string
@@ -557,13 +558,18 @@ func (s *Subscription) finish() bool {
 // abandon ends a subscription the broker did not grant in time, or
 // refused: nobody reads it. The broker is told to take it back, with no
 // wait for its answer, in case it grants it yet.
+//
+// The carrier is told before the filter is given back, as in Unsubscribe:
+// a filter given back first can be subscribed to again at once, and the
+// unsubscription sent after it would take that new subscription away.
 func (s *Subscription) abandon() {
 	s.finish()
-	s.conn.release(s.filter)
 
 	if s.conn.Err() == nil {
 		s.conn.client.Unsubscribe(s.filter)
 	}
+
+	s.conn.release(s.filter)
 }
 
 // queued is a message already received, when there is one.
