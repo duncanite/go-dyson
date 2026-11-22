@@ -61,8 +61,8 @@ type Received struct {
 	QoS mqtt.QoS `json:"-"`
 }
 
-// Purifier is the fake. A test changes Product and Sensors through Set,
-// or before a client connects.
+// Purifier is the fake. A test changes Product through Set and Sensors
+// through Sense, or either before a client connects.
 type Purifier struct {
 	*mqtttest.Broker
 
@@ -174,6 +174,18 @@ func (p *Purifier) Set(name, value string) {
 	p.mu.Unlock()
 
 	p.Say("STATE-CHANGE", "product-state", change)
+}
+
+// Sense changes what one sensor reads, and has the purifier say all its
+// sensors read, as it does from time to time: what a client then asks for
+// is the same.
+func (p *Purifier) Sense(name, value string) {
+	p.mu.Lock()
+	p.Sensors[name] = value
+	read := maps.Clone(p.Sensors)
+	p.mu.Unlock()
+
+	p.Say("ENVIRONMENTAL-CURRENT-SENSOR-DATA", "data", read)
 }
 
 // Say has the purifier publish a message of a kind, with fields under a
