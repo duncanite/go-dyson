@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"slices"
 	"strconv"
 	"strings"
@@ -357,10 +358,33 @@ func heating(heat *dyson.Heat) string {
 	}
 
 	if heat.Target != nil {
-		said += ", to " + degrees(*heat.Target)
+		said += ", to " + aimed(*heat.Target)
 	}
 
 	return said
+}
+
+// aimed is a heater's target, in Celsius, written in both scales. A
+// purifier holds a target to the tenth of a kelvin, which no whole degree
+// of either scale is: a target that is the nearest it can hold to a whole
+// degree is written as that degree, the one it was set to.
+func aimed(celsius float64) string {
+	// Half a tenth of a kelvin, in each scale.
+	const reachCelsius, reachFahrenheit = 0.05, 0.09
+
+	return snapped(celsius, reachCelsius) + "C, " + snapped(celsius*9/5+32, reachFahrenheit) + "F"
+}
+
+// snapped is a value to the tenth, or the whole number within its reach.
+func snapped(value, reach float64) string {
+	// A float's last digit is not to keep a value out of reach.
+	const slack = 1e-9
+
+	if whole := math.Round(value); math.Abs(value-whole) <= reach+slack {
+		value = whole
+	}
+
+	return fmt.Sprintf("%.1f", value)
 }
 
 // degrees is a temperature in Celsius, written in both scales.
