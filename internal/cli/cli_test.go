@@ -3,6 +3,7 @@ package cli_test
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"reflect"
 	"strings"
 	"sync"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/duncanite/go-dyson/dyson/dysontest"
 	"github.com/duncanite/go-dyson/internal/cli"
+	"github.com/duncanite/go-dyson/mqtt"
 )
 
 func started(t *testing.T) *dysontest.Purifier {
@@ -196,6 +198,190 @@ func TestAPurifiersWords(t *testing.T) {
 
 	if lines := stdout.lines(); len(lines) != 1 || !strings.Contains(lines[0], "error "+shown) {
 		t.Errorf("watch of a purifier with a hostile code printed %q", lines)
+	}
+}
+
+// TestWhole: status --whole prints the purifier's two answers whole, each
+// a JSON document, a field this command reads nowhere among them; what
+// the purifier wrote that a terminal would obey is written as JSON writes
+// it, and reads back as the purifier wrote it. watch --whole prints each
+// thing said on one line.
+func TestWhole(t *testing.T) {
+	t.Parallel()
+
+	fake := started(t)
+	fake.Product["bril"] = "0003"
+	fake.Product["ercd"] = "02C0\ndyson: all is well\u202e\x1b[2J\x7f"
+
+	said, errs, status := run(t, fake, sticker(), "status", "--whole")
+	if status != cli.ExitOK || errs != "" || strings.ContainsAny(said, "\x1b\u202e\x7f") {
+		t.Fatalf("status --whole exits %d, saying %q and\n%q", status, errs, said)
+	}
+
+	decoder := json.NewDecoder(strings.NewReader(said))
+
+	var documents []map[string]json.RawMessage
+
+	for decoder.More() {
+		var document map[string]json.RawMessage
+		if err := decoder.Decode(&document); err != nil {
+			t.Fatalf("status --whole printed what is no JSON: %v\n%s", err, said)
+		}
+
+		documents = append(documents, document)
+	}
+
+	if len(documents) != 2 || string(documents[0]["msg"]) != `"CURRENT-STATE"` ||
+		string(documents[1]["msg"]) != `"ENVIRONMENTAL-CURRENT-SENSOR-DATA"` {
+		t.Fatalf("status --whole printed %d documents:\n%s", len(documents), said)
+	}
+
+	var state map[string]string
+	if err := json.Unmarshal(documents[0]["product-state"], &state); err != nil || state["bril"] != "0003" ||
+		state["ercd"] != fake.Product["ercd"] {
+		t.Errorf("the state printed whole reads back as %v, %v", state, err)
+	}
+
+	// A person reads it: one field a line.
+	if !strings.Contains(said, "\n    \"bril\": \"0003\"") {
+		t.Errorf("status --whole is not indented:\n%s", said)
+	}
+
+	ctx, stop := context.WithCancel(t.Context())
+	defer stop()
+
+	var (
+		stdout out
+		stderr bytes.Buffer
+		ended  = make(chan int, 1)
+	)
+
+	env := sticker()
+
+	go func() {
+		ended <- cli.Run(ctx, cli.Environment{
+			Args: []string{"--host", fake.Addr(), "watch", "--whole"}, Out: &stdout, Err: &stderr,
+			Getenv: func(name string) string { return env[name] },
+		})
+	}()
+
+	deadline := time.Now().Add(5 * time.Second)
+	for len(stdout.lines()) < 2 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+
+	stop()
+
+	if exit := <-ended; exit != cli.ExitOK {
+		t.Errorf("watch --whole, told to stop, exits %d saying %q", exit, stderr.String())
+	}
+
+	lines := stdout.lines()
+	if len(lines) != 2 {
+		t.Fatalf("watch --whole printed %q", lines)
+	}
+
+	for index, message := range []string{"CURRENT-STATE", "ENVIRONMENTAL-CURRENT-SENSOR-DATA"} {
+		_, document, _ := strings.Cut(lines[index], "  ")
+
+		var read map[string]json.RawMessage
+		if err := json.Unmarshal([]byte(document), &read); err != nil || string(read["msg"]) != `"`+message+`"` {
+			t.Errorf(
+				"line %d of watch --whole is %q, want the %s as one JSON document: %v",
+				index,
+				lines[index],
+				message,
+				err,
+			)
+		}
+	}
+}
+
+// TestWholeOfWhatIsNotRead: the message most worth seeing whole is the one
+// this module cannot read: it is printed, then its error is said. A
+// message with white space after it is printed as JSON all the same, and
+// one that is no JSON as the purifier's text, with nothing a terminal
+// obeys in it.
+func TestWholeOfWhatIsNotRead(t *testing.T) {
+	t.Parallel()
+
+	fake := started(t)
+	fake.Trailing = "\r\n\t "
+
+	said, errs, status := run(t, fake, sticker(), "status", "--whole")
+	if status != cli.ExitOK || errs != "" || strings.Contains(said, `\u000d`) || strings.Contains(said, `\u0009`) {
+		t.Fatalf("status --whole of messages that end with white space exits %d, saying %q and\n%s", status, errs, said)
+	}
+
+	decoder := json.NewDecoder(strings.NewReader(said))
+
+	for documents := range 2 {
+		var document map[string]json.RawMessage
+		if err := decoder.Decode(&document); err != nil {
+			t.Fatalf("document %d of status --whole is no JSON: %v\n%s", documents, err, said)
+		}
+	}
+
+	if decoder.More() {
+		t.Errorf("status --whole printed more than two documents:\n%s", said)
+	}
+
+	fake.Trailing = ""
+	fake.Product["fmod"] = "MAYBE"
+
+	said, errs, status = run(t, fake, sticker(), "status", "--whole")
+
+	var state map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(said), &state); status != cli.ExitError || err != nil ||
+		!strings.Contains(string(state["product-state"]), `"MAYBE"`) ||
+		!strings.Contains(errs, `a state whose mode is "MAYBE"`) {
+		t.Errorf(
+			"status --whole of a state that cannot be read exits %d, saying %q and\n%s\n(%v)",
+			status,
+			errs,
+			said,
+			err,
+		)
+	}
+
+	ctx, stop := context.WithCancel(t.Context())
+	defer stop()
+
+	var (
+		stdout out
+		stderr bytes.Buffer
+		ended  = make(chan int, 1)
+	)
+
+	env := sticker()
+	fake.Product["fmod"] = "FAN"
+
+	go func() {
+		ended <- cli.Run(ctx, cli.Environment{
+			Args: []string{"--host", fake.Addr(), "watch", "--whole"}, Out: &stdout, Err: &stderr,
+			Getenv: func(name string) string { return env[name] },
+		})
+	}()
+
+	deadline := time.Now().Add(5 * time.Second)
+	for len(stdout.lines()) < 2 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+
+	fake.Publish(mqtt.Message{Topic: dysontest.Status, Payload: []byte("not JSON\x1b[2J at all")})
+
+	// What cannot be read ends the watch, once it was printed.
+	select {
+	case exit := <-ended:
+		if exit != cli.ExitError {
+			t.Errorf("watch --whole of what is no JSON exits %d", exit)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("watch --whole went on past a message it cannot read")
+	}
+
+	if lines := stdout.lines(); len(lines) != 3 || !strings.HasSuffix(lines[2], `  not JSON\x1b[2J at all`) {
+		t.Errorf("watch --whole of what is no JSON printed %q", lines)
 	}
 }
 

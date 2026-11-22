@@ -89,7 +89,8 @@ Wi-Fi sticker.
 - `dyson`: `FromSticker` makes a purifier's identity from the network name and the
   password on its sticker. `Recognize` and `Find` say what a purifier is on the network.
   `Dial` connects; `State` and `Environment` ask for how it is
-  set and what its sensors read; `Next` reads what it says as it says it; `SetMode`,
+  set and what its sensors read; `Next` reads what it says as it says it, each thing
+  with the message whole, and `Ask` has it say both without waiting; `SetMode`,
   `SetSpeed`, `SetOscillation`, `SetNightMode` and `SetSleepTimer` drive it, `SetHeat`
   and `SetHeatTarget` a Hot+Cool's heater; `Done` and `Err` say when the connection
   ended, and why.
@@ -181,6 +182,16 @@ Wi-Fi sticker.
   degree, within half a tenth of a kelvin, is printed as that degree, in whichever scale
   it is one; any other, and every temperature a sensor reads, is printed to the tenth as
   it is. The library's `Heat.Target` is the purifier's own value, unchanged.
+- **What a purifier says can be read whole.** This module reads the fields it knows, and
+  a purifier says more, and may say a known thing under a name this module reads
+  second: it took a program written aside to see that one sends its particulates under
+  two names that disagree. An `Update` carries the message it was read from, whole, and
+  `status --whole` and `watch --whole` print it: indented for the two answers, one line
+  a message under watch. It is the purifier's text, printed so that it stays JSON and
+  holds nothing a terminal obeys: a character a terminal would not simply draw is
+  written as JSON writes one. The message this module cannot read is the one most worth
+  seeing: it comes whole with its error, and is printed before the error is said; one
+  that is no JSON is printed as the purifier's text.
 - **MQTT 3.1, as both implementations pin it**: libdyson-neon asks its library for
   `MQTTv31`, and [opendyson](https://github.com/libdyson-wg/opendyson) sets Paho's
   protocol version to 3. Whether a purifier takes MQTT 3.1.1 is not known.
