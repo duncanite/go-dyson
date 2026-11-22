@@ -375,6 +375,17 @@ read back by `status`:
 In both its volatile compounds read nothing, where they had read 0 before: which of
 `OFF`, `INIT` and `FAIL` the sensor then said is not known.
 
+After that, `status --whole` and `watch --whole` were run on the purifier of type 475:
+
+- `status --whole` printed its state and then its sensors, each as indented JSON.
+- `watch --whole` printed one line a message: its state once and its sensors twice, a
+  millisecond apart by the purifier's own times, to the two questions a watch begins
+  with. Whether it says its sensors with its state, or answers that question twice, is
+  not told apart.
+- Its state holds what this module does not read: beside `product-state`, the keys
+  `mode-reason`, `state-reason`, `dial` and `rssi`, and a `scheduler` block; and in
+  `product-state`, `qtar`.
+
 ## Open questions
 
 - Whether the purifiers and the machine that runs the command are on one network. The
@@ -383,8 +394,8 @@ In both its volatile compounds read nothing, where they had read 0 before: which
 
 ## Not verified
 
-- `on` on a purifier of type 475, and on either type `watch` and what a purifier says
-  unasked: run against the module's own stand-in only.
+- `on` on a purifier of type 475, `watch` on one of type 527, and on either type what a
+  purifier says unasked: run against the module's own stand-in only.
 - What the account's API answers when it refuses, a code asked for too often among it:
   read off the reference implementation, and run against a stand-in of the API only.
 - What a purifier of type 527 takes at either end of the heat target's range.
