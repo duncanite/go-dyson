@@ -125,7 +125,7 @@ func FromSticker(ssid, password string) (Identity, error) {
 }
 
 // Purifier is a connection to one purifier. It is for one goroutine at a
-// time.
+// time, but for Done and Err, which any goroutine may call.
 type Purifier struct {
 	conn    *mqtt.Conn
 	said    *mqtt.Subscription
@@ -174,6 +174,20 @@ func Dial(ctx context.Context, host string, identity Identity) (*Purifier, error
 // Close ends the connection.
 func (p *Purifier) Close() error {
 	return p.conn.Close()
+}
+
+// Done is closed when the connection is over: closed, or lost. It is what a
+// caller waits on beside its other work to learn that the purifier went,
+// with nothing asked of it. Nothing connects again by itself: a purifier
+// that went is the caller's to Dial again.
+func (p *Purifier) Done() <-chan struct{} {
+	return p.conn.Done()
+}
+
+// Err is nil while the connection lives, mqtt.ErrClosed after Close, and
+// an mqtt.ErrLost with its cause when the purifier went by itself.
+func (p *Purifier) Err() error {
+	return p.conn.Err()
 }
 
 // The messages, by their msg.

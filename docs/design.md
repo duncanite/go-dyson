@@ -83,7 +83,8 @@ account.
 - `dyson`: `FromSticker` makes a purifier's identity from the network name and the
   password on its sticker. `Dial` connects; `State` and `Environment` ask for how it is
   set and what its sensors read; `Next` reads what it says as it says it; `SetMode`,
-  `SetSpeed`, `SetOscillation`, `SetNightMode` and `SetSleepTimer` drive it.
+  `SetSpeed`, `SetOscillation`, `SetNightMode` and `SetSleepTimer` drive it; `Done` and
+  `Err` say when the connection ended, and why.
 - `mqtt`: an MQTT client of this module's own design, and `mqtt/mqtttest`, a broker for
   tests.
 - `dyson/dysontest`: a purifier for tests, on that broker.
@@ -106,6 +107,10 @@ account.
 - **A `Purifier` is for one goroutine.** What the purifier says arrives on one
   subscription; `State`, `Environment` and `Next` all read it, and each passes over what
   it did not ask for.
+- **A `Purifier` says that its connection ended; it never connects again by itself.**
+  `Done` and `Err` are the connection's own, for a caller that only sends a command from
+  time to time and would otherwise hold a dead connection until its next one failed. A
+  purifier that went is the caller's to wait for and to `Dial` again.
 - **A change returns when the broker took it**, at quality of service 1, as the
   reference implementation publishes it. What the purifier then does, it says, and
   `Next` reads.
