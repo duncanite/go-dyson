@@ -8,7 +8,9 @@
 package cli
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -18,6 +20,8 @@ import (
 	"strings"
 	"text/tabwriter"
 	"time"
+	"unicode"
+	"unicode/utf16"
 
 	"github.com/alecthomas/kong"
 	"github.com/forkcloser/go-mdns/transport"
@@ -118,13 +122,17 @@ type toggle struct {
 }
 
 type (
-	discoverCommand  struct{}
-	accountCommand   struct{}
-	statusCommand    struct{}
-	onCommand        struct{}
-	offCommand       struct{}
-	autoCommand      struct{}
-	watchCommand     struct{}
+	discoverCommand struct{}
+	accountCommand  struct{}
+	statusCommand   struct {
+		Whole bool `help:"Print the purifier's two answers whole, in JSON, in place of what is read of them."`
+	}
+	onCommand    struct{}
+	offCommand   struct{}
+	autoCommand  struct{}
+	watchCommand struct {
+		Whole bool `help:"Print each thing the purifier says whole, in JSON, one a line."`
+	}
 	oscillateCommand struct{ toggle }
 	nightCommand     struct{ toggle }
 	speedCommand     struct {
@@ -275,7 +283,11 @@ func (root *rootCommand) connected(ctx context.Context, action func(context.Cont
 	return action(ctx, purifier)
 }
 
-func (*statusCommand) Run(ctx context.Context, root *rootCommand) error {
+func (cmd *statusCommand) Run(ctx context.Context, root *rootCommand) error {
+	if cmd.Whole {
+		return root.with(ctx, root.answers)
+	}
+
 	return root.with(ctx, func(ctx context.Context, purifier *dyson.Purifier) error {
 		state, err := purifier.State(ctx)
 		if err != nil {
@@ -301,6 +313,97 @@ func (*statusCommand) Run(ctx context.Context, root *rootCommand) error {
 
 		return nil
 	})
+}
+
+// answers asks the purifier for its state and its sensors, and prints each
+// answer whole, as JSON a person can read, with whatever else it says
+// until it has given both.
+func (root *rootCommand) answers(ctx context.Context, purifier *dyson.Purifier) error {
+	if err := purifier.Ask(ctx); err != nil {
+		return err
+	}
+
+	for state, environment := false, false; !state || !environment; {
+		// A message this module cannot read is the one most worth seeing:
+		// it is printed before its error is said.
+		update, err := purifier.Next(ctx)
+
+		root.written("", update.Whole, true)
+
+		if err != nil {
+			return err
+		}
+
+		state, environment = state || update.State != nil, environment || update.Environment != nil
+	}
+
+	return nil
+}
+
+// written prints a message whole, each line after lead: as JSON, indented
+// or on one line, when it is JSON, and as the purifier's text when it is
+// not. The lines are this command's; what is on each is the purifier's.
+func (root *rootCommand) written(lead string, message []byte, indented bool) {
+	// What follows a document is no part of it, and indenting keeps it: a
+	// message that ends with a line end would print as no JSON.
+	message = bytes.TrimSpace(message)
+	if len(message) == 0 {
+		return
+	}
+
+	var (
+		document bytes.Buffer
+		err      error
+	)
+
+	if indented {
+		err = json.Indent(&document, message, "", "  ")
+	} else {
+		err = json.Compact(&document, message)
+	}
+
+	if err != nil {
+		terminal.Printf(root.out, "%s%s\n", lead, string(message))
+
+		return
+	}
+
+	for line := range strings.SplitSeq(drawn(document.Bytes()), "\n") {
+		terminal.Printf(root.out, "%s%s\n", lead, line)
+	}
+}
+
+// drawn is a JSON document with every character a terminal would not
+// simply draw written as JSON itself writes one, \uXXXX, a pair of them
+// for a character past the sixteen bits: the document reads back the same,
+// and holds nothing a terminal obeys. Such a character is inside a string:
+// outside one, a document that was indented or compacted, with nothing
+// after it, holds spaces and line ends alone, and the line ends are kept.
+//
+// What terminal.Text would write for them is Go's, and two of its forms,
+// \x7f and \U000e0067, are no JSON.
+func drawn(document []byte) string {
+	var written strings.Builder
+
+	for _, char := range string(document) {
+		if char == '\n' || unicode.IsPrint(char) {
+			written.WriteRune(char)
+		} else {
+			written.WriteString(escaped(char))
+		}
+	}
+
+	return written.String()
+}
+
+// escaped is one character as JSON escapes it: \uXXXX, and a pair of
+// them, its two halves, for a character sixteen bits do not hold.
+func escaped(char rune) string {
+	if high, low := utf16.EncodeRune(char); high != unicode.ReplacementChar {
+		return fmt.Sprintf(`\u%04x\u%04x`, high, low)
+	}
+
+	return fmt.Sprintf(`\u%04x`, char)
 }
 
 // later is whether the purifier is of the generation after the Link's,
@@ -524,7 +627,11 @@ func (cmd *heatCommand) Run(ctx context.Context, root *rootCommand) error {
 
 // Run prints what the purifier says, one line each, until the context is
 // done, which is how the command is told to stop.
-func (*watchCommand) Run(ctx context.Context, root *rootCommand) error {
+func (cmd *watchCommand) Run(ctx context.Context, root *rootCommand) error {
+	if cmd.Whole {
+		return root.connected(ctx, root.heard)
+	}
+
 	return root.connected(ctx, func(ctx context.Context, purifier *dyson.Purifier) error {
 		// Ask once, so that there is something to see before anything
 		// changes.
@@ -543,6 +650,33 @@ func (*watchCommand) Run(ctx context.Context, root *rootCommand) error {
 
 		return err
 	})
+}
+
+// heard asks the purifier for its state and its sensors once, then prints
+// each thing it says whole, as JSON on one line, until the context is
+// done.
+func (root *rootCommand) heard(ctx context.Context, purifier *dyson.Purifier) error {
+	err := purifier.Ask(ctx)
+
+	for err == nil {
+		err = root.whole(ctx, purifier)
+	}
+
+	if ctx.Err() != nil {
+		return nil //nolint:nilerr // told to stop: the context's end is how watch ends, and no failure
+	}
+
+	return err
+}
+
+// whole prints the next thing the purifier says, whole, on one line; one
+// this module cannot read is printed before its error is said.
+func (root *rootCommand) whole(ctx context.Context, purifier *dyson.Purifier) error {
+	update, err := purifier.Next(ctx)
+
+	root.written(time.Now().Format(time.TimeOnly)+"  ", update.Whole, false)
+
+	return err
 }
 
 // line is what the purifier said, in one line.

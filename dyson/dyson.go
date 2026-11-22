@@ -262,12 +262,21 @@ type (
 type Update struct {
 	State       *State
 	Environment *Environment
+	// Whole is the message as the purifier sent it, in JSON: what this
+	// package read the other two from, and whatever else the purifier put
+	// there. It is the purifier's own text, and is shown as such.
+	//
+	// It is set too on the Update that comes with an ErrAnswer, where
+	// neither of the other two is: the message this package could not
+	// read, which may then be no JSON.
+	Whole json.RawMessage
 }
 
 // Next is the next thing the purifier says, waiting for it until ctx is
 // done: a change of its state, which it sends as it happens, or its
 // sensors' readings, which it sends when asked and from time to time. A
-// message of another kind is passed over.
+// message of another kind is passed over. One that is not in the shape the
+// reference implementation reads is ErrAnswer, and comes whole with it.
 func (p *Purifier) Next(ctx context.Context) (Update, error) {
 	for {
 		message, err := p.said.Next(ctx)
@@ -277,25 +286,36 @@ func (p *Purifier) Next(ctx context.Context) (Update, error) {
 
 		var heard report
 		if err = json.Unmarshal(message.Payload, &heard); err != nil {
-			return Update{}, fmt.Errorf("%w: %w", ErrAnswer, err)
+			return Update{Whole: message.Payload}, fmt.Errorf("%w: %w", ErrAnswer, err)
 		}
 
 		switch heard.Message {
 		case currentState, stateChange:
 			state, err := heard.state(p.speaks)
 			if err != nil {
-				return Update{}, err
+				return Update{Whole: message.Payload}, err
 			}
 
 			p.remember(&heard)
 
-			return Update{State: &state}, nil
+			return Update{State: &state, Whole: message.Payload}, nil
 		case sensorData:
 			environment := heard.environment(p.speaks)
 
-			return Update{Environment: &environment}, nil
+			return Update{Environment: &environment, Whole: message.Payload}, nil
 		}
 	}
+}
+
+// Ask has the purifier say its state and what its sensors read, and waits
+// for neither: Next reads the two answers, among whatever else the
+// purifier says.
+func (p *Purifier) Ask(ctx context.Context) error {
+	if err := p.send(ctx, askState, nil); err != nil {
+		return err
+	}
+
+	return p.send(ctx, askEnvironment, nil)
 }
 
 // State asks the purifier for its state and waits for it. What the

@@ -292,6 +292,95 @@ func TestReading(t *testing.T) {
 	}
 }
 
+// TestWhole: Ask has the purifier say its state and its sensors, with no
+// wait, and each thing Next then reads comes with the message whole, as
+// the purifier sent it, what this package does not read among it.
+func TestWhole(t *testing.T) {
+	t.Parallel()
+
+	fake, purifier := connected(t)
+	ctx := soon(t)
+
+	fake.Product["bril"] = "0003"
+
+	if err := purifier.Ask(ctx); err != nil {
+		t.Fatalf("Ask: %v", err)
+	}
+
+	for _, want := range []struct {
+		message, under, field, value string
+	}{
+		{"CURRENT-STATE", "product-state", "bril", "0003"},
+		{"ENVIRONMENTAL-CURRENT-SENSOR-DATA", "data", "tact", "2977"},
+	} {
+		update, err := purifier.Next(ctx)
+		if err != nil {
+			t.Fatalf("Next: %v", err)
+		}
+
+		var whole map[string]json.RawMessage
+		if err = json.Unmarshal(update.Whole, &whole); err != nil {
+			t.Fatalf("the whole of %s is no JSON: %v: %s", want.message, err, update.Whole)
+		}
+
+		var fields map[string]string
+		if err = json.Unmarshal(
+			whole[want.under],
+			&fields,
+		); err != nil ||
+			string(whole["msg"]) != `"`+want.message+`"` ||
+			fields[want.field] != want.value {
+			t.Errorf("the whole of %s = %s, want %s under %s", want.message, update.Whole, want.field, want.under)
+		}
+
+		if (update.State != nil) != (want.under == "product-state") {
+			t.Errorf("%s came as %+v", want.message, update)
+		}
+	}
+
+	// Both were asked for, as questions are: once each, unacknowledged.
+	asked := fake.Received()
+	if len(asked) != 2 || asked[0].Message != "REQUEST-CURRENT-STATE" ||
+		asked[1].Message != "REQUEST-PRODUCT-ENVIRONMENT-CURRENT-SENSOR-DATA" || asked[0].QoS != mqtt.AtMostOnce ||
+		asked[1].QoS != mqtt.AtMostOnce {
+		t.Errorf("Ask sent %+v", asked)
+	}
+}
+
+// TestWholeOfWhatIsNotRead: a message this package cannot read is
+// ErrAnswer, and comes whole with it: a state whose mode is no word of
+// the purifier's, and a message that is no JSON at all.
+func TestWholeOfWhatIsNotRead(t *testing.T) {
+	t.Parallel()
+
+	fake, purifier := connected(t)
+	ctx := soon(t)
+
+	fake.Product["fmod"] = "MAYBE"
+
+	if err := purifier.Ask(ctx); err != nil {
+		t.Fatalf("Ask: %v", err)
+	}
+
+	update, err := purifier.Next(ctx)
+	if !errors.Is(err, dyson.ErrAnswer) || update.State != nil || update.Environment != nil ||
+		!strings.Contains(string(update.Whole), `"fmod":"MAYBE"`) {
+		t.Errorf("Next on a state it cannot read = %+v, %v, want ErrAnswer with the message whole", update, err)
+	}
+
+	// The sensors' answer, which was read.
+	if update, err = purifier.Next(ctx); err != nil || update.Environment == nil {
+		t.Fatalf("Next: %+v, %v", update, err)
+	}
+
+	fake.Publish(mqtt.Message{Topic: dysontest.Status, Payload: []byte("not JSON at all")})
+
+	update, err = purifier.Next(ctx)
+	if !errors.Is(err, dyson.ErrAnswer) || string(update.Whole) != "not JSON at all" {
+		t.Errorf("Next on what is no JSON = %+v, %v, want ErrAnswer with the message whole", update, err)
+	}
+}
+
 // TestSetting: each change is one STATE-SET, as the app's, acknowledged,
 // with the fields the purifier reads; the purifier takes it, and says so.
 func TestSetting(t *testing.T) {

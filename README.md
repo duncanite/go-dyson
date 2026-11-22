@@ -27,6 +27,7 @@ just dyson night on        # the quiet, dimmed mode
 just dyson timer 2h        # turn itself off after a time; off ends the timer
 just dyson heat 21         # a Hot+Cool: heat to a temperature in Celsius; also on, off
 just dyson watch           # print what it says as it says it, until interrupted
+just dyson status --whole  # its two answers as it sent them, in JSON; watch takes it too
 ```
 
 Each purifier has its own sticker and its own address: two purifiers are two

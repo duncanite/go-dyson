@@ -72,6 +72,10 @@ type Purifier struct {
 	Product map[string]string
 	Sensors map[string]string
 
+	// Trailing is put after every message the purifier publishes: what a
+	// firmware that ends its messages with a line end sends.
+	Trailing string
+
 	received []Received
 	// status and command are its topics; hotCool is whether it is of the
 	// generation after the Link's.
@@ -179,6 +183,10 @@ func (p *Purifier) Say(kind, name string, fields any) {
 	if err != nil {
 		panic(err)
 	}
+
+	p.mu.Lock()
+	payload = append(payload, p.Trailing...)
+	p.mu.Unlock()
 
 	p.Publish(mqtt.Message{Topic: p.status, Payload: payload})
 }
