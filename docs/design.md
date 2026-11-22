@@ -347,6 +347,17 @@ Then the rest of its commands were run on it, in three turns, each read back by
 So every command this module has for the later generation was taken by a real purifier
 as it is sent, the auto mode sent with the power among them.
 
+Last, the Link's other commands were run on the purifier of type 475, in two turns, each
+read back by `status`:
+
+- `auto`, `oscillate on`, `night on`, `timer 30m`: the fan was in auto and turning, the
+  purifier oscillating, night mode on, and the sleep timer at 29 minutes.
+- `timer off`, `night off`, `oscillate off`, `speed 2`: the purifier was as it had been
+  found, the fan on at speed 2, not oscillating, night mode off, no timer.
+
+In both its volatile compounds read nothing, where they had read 0 before: which of
+`OFF`, `INIT` and `FAIL` the sensor then said is not known.
+
 ## Open questions
 
 - Whether the purifiers and the machine that runs the command are on one network. The
@@ -355,19 +366,16 @@ as it is sent, the auto mode sent with the power among them.
 
 ## Not verified
 
-- `on`, `auto`, `oscillate`, `night` and `timer`, `watch`, and what a purifier says
+- `on` on a purifier of type 475, and on either type `watch` and what a purifier says
   unasked: run against the module's own stand-in only.
 - What the account's API answers when it refuses, a code asked for too often among it:
   read off the reference implementation, and run against a stand-in of the API only.
-- What a purifier of type 527 says unasked, which `watch` prints: read off the reference
-  implementation, and run against the module's own stand-in only. So is what one takes
-  at either end of the heat target's range.
+- What a purifier of type 527 takes at either end of the heat target's range.
 - What a particulate reading of 999 is, and what the error `11E1` is: see [Observed on
   purifiers](#observed-on-purifiers).
 - Whether a TP02 takes a second connection while the Dyson app holds one.
 - What a purifier answers a change it refuses: the reference implementation waits for
   no answer.
-- The unit of the heating target, read as tenths of a kelvin by inference.
 - The particulates' and volatile compounds' units: the reference implementation calls
   them "unknown unit".
 - Reports that some recent models refuse local connections, the Big+Quiet with
