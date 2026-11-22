@@ -270,6 +270,42 @@ func TestRetained(t *testing.T) {
 	}
 }
 
+// TestRetainedBehindTheGrant: what a broker sends right behind its grant,
+// more than a subscription holds, is no overrun: the grant is read ahead
+// of it, and every message waits for its reader.
+func TestRetainedBehindTheGrant(t *testing.T) {
+	t.Parallel()
+
+	const kept = 50
+
+	broker := started(t)
+	conn := dialled(t, broker, mqtt.Options{Buffer: 2})
+	ctx := soon(t)
+
+	for index := range kept {
+		if err := conn.Publish(ctx, mqtt.Message{
+			Topic: "kept/" + strconv.Itoa(index), Payload: []byte("held"), QoS: mqtt.AtLeastOnce, Retain: true,
+		}); err != nil {
+			t.Fatalf("Publish: %v", err)
+		}
+	}
+
+	sub, err := conn.Subscribe(ctx, "kept/#", mqtt.AtMostOnce)
+	if err != nil {
+		t.Fatalf("Subscribe with %d retained messages behind the grant = %v", kept, err)
+	}
+
+	topics := map[string]bool{}
+
+	for range kept {
+		topics[read(ctx, t, sub).Topic] = true
+	}
+
+	if len(topics) != kept {
+		t.Errorf("%d retained messages were read on %d topics", kept, len(topics))
+	}
+}
+
 // TestSubscriptions: a filter is held once on a Conn, and again once
 // unsubscribed; an unsubscribed subscription hands over what it had and
 // then says it is closed, and receives no more; a filter the broker
@@ -419,8 +455,7 @@ func TestGivenUp(t *testing.T) {
 
 	// While its grant is held back the broker sends on the filter all the
 	// same, as it may, and more than a subscription keeps: what nobody
-	// reads holds the connection until the subscription is given up on,
-	// and no longer.
+	// can read yet holds nothing back.
 	early := make(chan struct{})
 
 	go func() {
@@ -480,6 +515,121 @@ func TestGivenUp(t *testing.T) {
 
 	if got := read(ctx, t, again); string(got.Payload) != "anew" {
 		t.Errorf("the filter asked for again read %q", got.Payload)
+	}
+}
+
+// TestEarly: what the broker sends on a filter before it grants it, when
+// nobody can read yet. As many as the buffer holds are kept, and are read
+// first, in order. More is ErrOverrun once the broker has answered, and no
+// wait: the Conn's other subscription reads on meanwhile, the broker is
+// told, and the filter can be asked for again.
+func TestEarly(t *testing.T) {
+	t.Parallel()
+
+	const buffer = 2
+
+	for _, early := range []int{0, 1, buffer, buffer + 1, 8, 64, 200} {
+		t.Run(strconv.Itoa(early)+" messages", func(t *testing.T) {
+			t.Parallel()
+
+			broker := started(t)
+			conn := dialled(t, broker, mqtt.Options{Buffer: buffer})
+			ctx := soon(t)
+
+			kept, err := conn.Subscribe(ctx, "a/#", mqtt.AtMostOnce)
+			if err != nil {
+				t.Fatalf("Subscribe: %v", err)
+			}
+
+			grant := broker.Hold()
+
+			type answer struct {
+				sub *mqtt.Subscription
+				err error
+			}
+
+			asked := make(chan answer, 1)
+
+			go func() {
+				sub, failed := conn.Subscribe(ctx, "b/#", mqtt.AtMostOnce)
+				asked <- answer{sub, failed}
+			}()
+
+			// The broker has the request: from here the client takes what
+			// comes on the filter.
+			for deadline := time.Now().Add(5 * time.Second); broker.Waiting() == 0; {
+				if time.Now().After(deadline) {
+					t.Fatal("the broker was never asked for the subscription")
+				}
+
+				time.Sleep(time.Millisecond)
+			}
+
+			for index := range early {
+				broker.Push(mqtt.Message{Topic: "b/x", Payload: []byte(strconv.Itoa(index))})
+			}
+
+			// Messages are handed over in order: once this one is read,
+			// every early one was taken, with the grant still to come.
+			broker.Push(mqtt.Message{Topic: "a/x", Payload: []byte("behind them")})
+
+			if got := read(ctx, t, kept); string(got.Payload) != "behind them" {
+				t.Fatalf("behind %d early messages, the subscription held read %q", early, got.Payload)
+			}
+
+			grant()
+
+			got := <-asked
+
+			if early <= buffer {
+				if got.err != nil {
+					t.Fatalf("Subscribe with %d early messages = %v", early, got.err)
+				}
+
+				for index := range early {
+					if message := read(ctx, t, got.sub); string(message.Payload) != strconv.Itoa(index) {
+						t.Fatalf("early message %d read %q", index, message.Payload)
+					}
+				}
+
+				broker.Publish(mqtt.Message{Topic: "b/x", Payload: []byte("later")})
+
+				if message := read(ctx, t, got.sub); string(message.Payload) != "later" {
+					t.Errorf("after the early messages, read %q", message.Payload)
+				}
+
+				return
+			}
+
+			if !errors.Is(got.err, mqtt.ErrOverrun) || got.sub != nil {
+				t.Fatalf("Subscribe with %d early messages = %v, want ErrOverrun", early, got.err)
+			}
+
+			if conn.Err() != nil {
+				t.Errorf("Err after a subscription was overrun = %v", conn.Err())
+			}
+
+			for deadline := time.Now().Add(5 * time.Second); slices.Contains(broker.Filters(), "b/#"); {
+				if time.Now().After(deadline) {
+					t.Fatalf("the broker still holds %v after a subscription was overrun", broker.Filters())
+				}
+
+				time.Sleep(time.Millisecond)
+			}
+
+			go grant()
+
+			again, err := conn.Subscribe(ctx, "b/#", mqtt.AtMostOnce)
+			if err != nil {
+				t.Fatalf("Subscribe again to the filter overrun = %v", err)
+			}
+
+			broker.Publish(mqtt.Message{Topic: "b/x", Payload: []byte("anew")})
+
+			if message := read(ctx, t, again); string(message.Payload) != "anew" {
+				t.Errorf("the filter asked for again read %q", message.Payload)
+			}
+		})
 	}
 }
 
