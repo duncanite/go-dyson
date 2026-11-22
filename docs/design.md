@@ -144,7 +144,10 @@ account.
   and returns when the broker has answered; messages are read from a `Subscription`, in
   order, and a subscription nobody reads holds the connection back and loses nothing.
   One whose grant did not come before its caller gave up is ended there, so that it
-  cannot. The package may become a module of its own.
+  cannot. Until the grant nobody can read, and a broker may send on the filter ahead of
+  it: as many messages as the buffer holds are kept, and more fails the `Subscribe` with
+  `ErrOverrun`, since a queue that held the connection back then would hold back the
+  grant it waits for. The package may become a module of its own.
 - **The bytes are carried by [Eclipse Paho](https://github.com/eclipse-paho/paho.mqtt.golang)**,
   the one maintained Go client found that speaks MQTT 3.1. Package `mqtt` and its test
   broker alone name it, a rule of `.lint-go.yaml` holds every other package to that, and

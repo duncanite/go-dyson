@@ -88,6 +88,9 @@ var (
 	ErrUnavailable = errors.New("the broker is unavailable")
 	// ErrRefused: the broker refused a subscription.
 	ErrRefused = errors.New("the broker refused the subscription")
+	// ErrOverrun: the broker sent more messages on a subscription before
+	// it granted it than a Subscription holds.
+	ErrOverrun = errors.New("more messages than the subscription holds came before the broker granted it")
 	// ErrLost: the connection went, and the Conn with it. The error wraps
 	// what the connection died of.
 	ErrLost = errors.New("the connection is lost")
@@ -369,11 +372,22 @@ type Subscription struct {
 	mu     sync.Mutex
 	closed chan struct{}
 	over   bool
+	// answered is closed when the broker has answered the subscription.
+	// overrun is set when the queue was full before that.
+	answered <-chan struct{}
+	overrun  bool
 }
 
 // Subscribe asks the broker for the messages of the topics filter
 // matches, at qos at most, and returns when the broker has granted it. A
 // Conn holds one subscription to a filter at a time.
+//
+// A broker may send messages the filter matches before it grants the
+// subscription, when nobody can read them yet. As many as Options.Buffer
+// are kept, and are the first Next hands over. More than that is
+// ErrOverrun, and the subscription is given up: a queue nobody can read
+// would hold back the connection, the grant with it. A larger Buffer
+// keeps more.
 func (c *Conn) Subscribe(ctx context.Context, filter string, qos QoS) (*Subscription, error) {
 	if err := CheckFilter(filter); err != nil {
 		return nil, err
@@ -393,7 +407,13 @@ func (c *Conn) Subscribe(ctx context.Context, filter string, qos QoS) (*Subscrip
 
 	sub := &Subscription{conn: c, filter: filter, queue: make(chan Message, c.buffer), closed: make(chan struct{})}
 
+	// Under the lock: a message that finds the queue full before the token
+	// is kept waits here for it, and does not take none for no answer.
+	sub.mu.Lock()
 	token := c.client.Subscribe(filter, byte(qos), sub.receive)
+	sub.answered = token.Done()
+	sub.mu.Unlock()
+
 	what := fmt.Sprintf("subscribing to %q", filter)
 
 	// A subscription that is not handed to the caller is nobody's to
@@ -417,6 +437,12 @@ func (c *Conn) Subscribe(ctx context.Context, filter string, qos QoS) (*Subscrip
 		}
 
 		sub.qos = QoS(granted)
+	}
+
+	if sub.overran() {
+		sub.abandon()
+
+		return nil, fmt.Errorf("%s: %w: more than %d", what, ErrOverrun, c.buffer)
 	}
 
 	return sub, nil
@@ -572,6 +598,34 @@ func (s *Subscription) abandon() {
 	s.conn.release(s.filter)
 }
 
+// overran is whether the queue was full before the broker answered.
+func (s *Subscription) overran() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return s.overrun
+}
+
+// read is whether a queue found full is to be waited on: the broker has
+// answered, so the subscription is about to be its caller's to read, or to
+// end. Before that it is overrun.
+//
+// The answer and not the handing over: what a broker sends right behind
+// its grant comes before Subscribe has returned, and is the caller's.
+func (s *Subscription) read() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	select {
+	case <-s.answered:
+		return true
+	default:
+		s.overrun = true
+
+		return false
+	}
+}
+
 // queued is a message already received, when there is one.
 func (s *Subscription) queued() (Message, bool) {
 	select {
@@ -584,13 +638,25 @@ func (s *Subscription) queued() (Message, bool) {
 
 // receive takes a message from the carrier, which hands them over one
 // after the other and waits for each to be taken: a full queue holds the
-// connection back.
+// connection back, once the broker has answered the subscription. Before
+// that it must not: the carrier reads the broker's answer behind the
+// messages, and would never come to it.
 func (s *Subscription) receive(_ paho.Client, received paho.Message) {
 	message := Message{
 		Topic:   received.Topic(),
 		Payload: append([]byte(nil), received.Payload()...),
 		QoS:     QoS(received.Qos()),
 		Retain:  received.Retained(),
+	}
+
+	select {
+	case s.queue <- message:
+		return
+	default:
+	}
+
+	if !s.read() {
+		return
 	}
 
 	select {

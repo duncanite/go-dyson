@@ -64,8 +64,10 @@ type Broker struct {
 	// stopped is closed when the broker is.
 	stopped chan struct{}
 
-	mu        sync.Mutex
-	held      chan struct{}
+	mu   sync.Mutex
+	held chan struct{}
+	// waiting is how many subscriptions wait for their grant now.
+	waiting   int
 	sessions  map[*session]struct{}
 	retained  map[string]mqtt.Message
 	hellos    []Hello
@@ -145,6 +147,15 @@ func (b *Broker) Hold() (grant func()) {
 		case <-b.stopped:
 		}
 	}
+}
+
+// Waiting is how many subscriptions the broker has been asked for and
+// holds the grant of now: a client asked, and has not been answered.
+func (b *Broker) Waiting() int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	return b.waiting
 }
 
 // Hellos is the sessions clients opened, accepted or not, in order.
@@ -389,11 +400,21 @@ func (b *Broker) publishedBy(one *session, sent *packets.PublishPacket) bool {
 func (b *Broker) granting() bool {
 	b.mu.Lock()
 	held := b.held
+
+	if held != nil {
+		b.waiting++
+	}
 	b.mu.Unlock()
 
 	if held == nil {
 		return true
 	}
+
+	defer func() {
+		b.mu.Lock()
+		b.waiting--
+		b.mu.Unlock()
+	}()
 
 	select {
 	case <-held:
