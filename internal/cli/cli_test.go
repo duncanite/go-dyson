@@ -35,7 +35,9 @@ func run(t *testing.T, fake *dysontest.Purifier, env map[string]string, args ...
 	var stdout, stderr bytes.Buffer
 
 	args = append([]string{"--host", fake.Addr()}, args...)
-	status = cli.Run(t.Context(), args, &stdout, &stderr, func(name string) string { return env[name] })
+	status = cli.Run(t.Context(), cli.Environment{
+		Args: args, Out: &stdout, Err: &stderr, Getenv: func(name string) string { return env[name] },
+	})
 
 	return stdout.String(), stderr.String(), status
 }
@@ -175,8 +177,10 @@ func TestAPurifiersWords(t *testing.T) {
 	env := sticker()
 
 	go func() {
-		ended <- cli.Run(ctx, []string{"--host", fake.Addr(), "watch"}, &stdout, &stderr,
-			func(name string) string { return env[name] })
+		ended <- cli.Run(ctx, cli.Environment{
+			Args: []string{"--host", fake.Addr(), "watch"}, Out: &stdout, Err: &stderr,
+			Getenv: func(name string) string { return env[name] },
+		})
 	}()
 
 	deadline := time.Now().Add(5 * time.Second)
@@ -239,19 +243,6 @@ func TestRefusing(t *testing.T) {
 		t.Errorf("the refused commands sent %+v", sent)
 	}
 
-	var out, errs bytes.Buffer
-
-	if status := cli.Run(
-		t.Context(),
-		[]string{"status"},
-		&out,
-		&errs,
-		func(string) string { return "" },
-	); status != cli.ExitError ||
-		!strings.Contains(errs.String(), "--host") {
-		t.Errorf("with no host, the command exits %d saying %q", status, errs.String())
-	}
-
 	help, _, status := run(t, fake, nil, "--help")
 	if status != cli.ExitOK || !strings.Contains(help, cli.EnvSSID) || !strings.Contains(help, cli.EnvPassword) {
 		t.Errorf("--help exits %d saying %q", status, help)
@@ -302,8 +293,10 @@ func TestWatch(t *testing.T) {
 	env := sticker()
 
 	go func() {
-		ended <- cli.Run(ctx, []string{"--host", fake.Addr(), "watch"}, &stdout, &stderr,
-			func(name string) string { return env[name] })
+		ended <- cli.Run(ctx, cli.Environment{
+			Args: []string{"--host", fake.Addr(), "watch"}, Out: &stdout, Err: &stderr,
+			Getenv: func(name string) string { return env[name] },
+		})
 	}()
 
 	// until waits for watch to have printed that many lines.

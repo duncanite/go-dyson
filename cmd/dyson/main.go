@@ -14,7 +14,9 @@ import (
 
 func main() {
 	app.Main(&app.Options{Name: "dyson"}, func(ctx context.Context) error {
-		if code := cli.Run(ctx, os.Args[1:], os.Stdout, os.Stderr, os.Getenv); code != cli.ExitOK {
+		env := cli.Environment{Args: os.Args[1:], Out: os.Stdout, Err: os.Stderr, Getenv: os.Getenv}
+
+		if code := cli.Run(ctx, env); code != cli.ExitOK {
 			return shutdown.ExitError(code)
 		}
 

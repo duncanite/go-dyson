@@ -1,7 +1,8 @@
 // Package cli is the dyson command: what a Pure Cool Link purifier on the
 // LAN says of itself and of the air, and the commands that drive its fan.
 // The purifier's sticker, its network name and its Wi-Fi password, comes
-// from the environment and from nowhere else.
+// from the environment and from nowhere else. Its address is given, or
+// the purifier the sticker names is searched for on the network.
 package cli
 
 import (
@@ -14,6 +15,7 @@ import (
 	"time"
 
 	"github.com/alecthomas/kong"
+	"github.com/forkcloser/go-mdns/transport"
 
 	"github.com/duncanite/go-dyson/dyson"
 	"github.com/duncanite/go-dyson/internal/terminal"
@@ -40,10 +42,26 @@ var errUsage = errors.New("cannot run")
 // status and Run recovers it.
 type exitStatus int
 
-type rootCommand struct {
-	Host    string        `env:"DYSON_HOST" help:"The purifier's address on the network."                          required:"true"`
-	Timeout time.Duration `default:"15s"    help:"How long to wait for the purifier, for every command but watch."`
+// Environment is what the command runs in.
+type Environment struct {
+	// Args is its arguments, without its name.
+	Args []string
+	// Out and Err are where it writes.
+	Out io.Writer
+	Err io.Writer
+	// Getenv reads the environment, where the purifier's sticker is.
+	Getenv func(string) string
+	// Network is where purifiers are searched for; nil is the host's own.
+	Network transport.Network
+}
 
+type rootCommand struct {
+	Host      string        `env:"DYSON_HOST"      help:"The purifier's address on the network; with none, the purifier the sticker names is searched for."`
+	Interface string        `env:"DYSON_INTERFACE" help:"The network interface the purifiers are on, when the host has several."`
+	Wait      time.Duration `default:"3s"          env:"DYSON_WAIT"                                                                                         help:"How long a search waits for purifiers to answer."`
+	Timeout   time.Duration `default:"15s"         help:"How long to wait for the purifier, its search included, for every command but watch."`
+
+	Discover  discoverCommand  `cmd:"" help:"Print the purifiers that announce themselves on this network. Needs no sticker."`
 	Status    statusCommand    `cmd:"" help:"Print how the purifier is set and what its sensors read."`
 	On        onCommand        `cmd:"" help:"Turn the fan on, at the speed it had."`
 	Off       offCommand       `cmd:"" help:"Turn the fan off."`
@@ -55,6 +73,7 @@ type rootCommand struct {
 	Watch     watchCommand     `cmd:"" help:"Print what the purifier says as it says it, until interrupted."`
 
 	out      io.Writer
+	network  transport.Network
 	identity dyson.Identity
 }
 
@@ -63,6 +82,7 @@ type toggle struct {
 }
 
 type (
+	discoverCommand  struct{}
 	statusCommand    struct{}
 	onCommand        struct{}
 	offCommand       struct{}
@@ -78,9 +98,8 @@ type (
 	}
 )
 
-// Run parses args and runs the command. getenv reads the environment,
-// where the purifier's sticker is.
-func Run(ctx context.Context, args []string, stdout, stderr io.Writer, getenv func(string) string) (status int) {
+// Run parses the arguments and runs the command.
+func Run(ctx context.Context, env Environment) (status int) {
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			exited, ok := recovered.(exitStatus)
@@ -92,36 +111,42 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer, getenv fu
 		}
 	}()
 
-	root := rootCommand{out: stdout}
+	root := rootCommand{out: env.Out, network: env.Network}
 
 	parser, err := kong.New(&root,
 		kong.Name("dyson"),
 		kong.Description("Read and drive a Dyson Pure Cool Link purifier on the LAN. Its sticker is read from "+
 			EnvSSID+", the network name printed on it, and "+EnvPassword+", the password beside it."),
 		kong.UsageOnError(),
-		kong.Writers(stdout, stderr),
+		kong.Writers(env.Out, env.Err),
 		kong.Exit(func(code int) { panic(exitStatus(code)) }),
 		kong.BindTo(ctx, (*context.Context)(nil)),
 	)
 	if err != nil {
-		terminal.Printf(stderr, "dyson: %s\n", err)
+		terminal.Printf(env.Err, "dyson: %s\n", err)
 
 		return ExitError
 	}
 
-	kctx, err := parser.Parse(args)
+	kctx, err := parser.Parse(env.Args)
 	if err != nil {
 		parser.Errorf("%s", err)
 
 		return ExitError
 	}
 
-	if err = root.identify(getenv); err == nil {
+	// What is on the network is anyone's to hear: discover asks for no
+	// sticker.
+	if kctx.Command() != "discover" {
+		err = root.identify(env.Getenv)
+	}
+
+	if err == nil {
 		err = kctx.Run(&root)
 	}
 
 	if err != nil {
-		terminal.Printf(stderr, "dyson: %s\n", err)
+		terminal.Printf(env.Err, "dyson: %s\n", err)
 
 		return ExitError
 	}
@@ -168,7 +193,7 @@ func (root *rootCommand) with(ctx context.Context, action func(context.Context, 
 }
 
 func (root *rootCommand) connected(ctx context.Context, action func(context.Context, *dyson.Purifier) error) error {
-	purifier, err := dyson.Dial(ctx, root.Host, root.identity)
+	purifier, err := root.dial(ctx)
 	if err != nil {
 		return err
 	}

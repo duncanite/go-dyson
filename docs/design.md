@@ -1,8 +1,9 @@
 # go-dyson: the design
 
 Research into Dyson connected air purifiers, done on 2026-11-15 from public sources, and
-the module built from it. The module follows the reference implementation's code; nothing
-here was run against a purifier.
+the module built from it. The module follows the reference implementation's code. Its
+search, its reads and two of its commands have been run against purifiers, as [Observed
+on purifiers](#observed-on-purifiers) says.
 
 In short: each purifier runs its own MQTT broker on the LAN, and with the purifier's
 credential a client reads its sensors and drives it there, with no cloud at run time. The
@@ -92,7 +93,8 @@ account.
 - `mqtt`: an MQTT client of this module's own design, and `mqtt/mqtttest`, a broker for
   tests.
 - `dyson/dysontest`: a purifier for tests, on that broker.
-- `cmd/dyson`: the command, over `internal/cli`.
+- `cmd/dyson`: the command, over `internal/cli`, which holds the host's mDNS, through
+  [go-mdns](https://github.com/forkcloser/go-mdns), and lends it to the library.
 
 ### Decisions
 
@@ -132,9 +134,23 @@ account.
   control or a direction mark, a line's end, a tab, a byte that is no text. A test reads
   the command's source and fails on a line printed any other way, since no test of what
   is printed could name every line there will be.
-- **Not built**: the search itself, in the command, which still takes an address; the
-  other product types, the account route, the air quality target, the monitoring switch,
-  resetting the filter, heat.
+- **With no address, the command looks for the sticker's purifier.** The sticker names a
+  serial, and a purifier announces its own: the command searches for `Service`, takes the
+  one whose serial is the sticker's, and tries each place it says it is, in order, until
+  one answers; a credential refused at one ends it, since it would be refused at all, and
+  a purifier's broker counts what it is asked. The search ends as soon as that purifier
+  is heard with an address, and at `--wait` otherwise. `discover` lists every purifier
+  that announces itself, and asks for no sticker: what is on the network is anyone's to
+  hear. An address given, by `--host`, is used as it is and nothing is searched for.
+  The search trusts what it hears: the credential made from the sticker goes, in MQTT
+  3.1's CONNECT, which is in the clear, to the first host on the network that announces
+  the sticker's serial with an address, and a purifier tells its serial to everyone. A
+  host on the network that announces that serial first is sent the credential. With
+  `--host` the same credential goes in the clear to the address given, so the search
+  adds who may be sent it and not how it is sent; a network nobody else is on is what
+  both rest on.
+- **Not built**: the other product types, the account route, the air quality target, the
+  monitoring switch, resetting the filter, heat.
 
 ### MQTT, and the library under it
 
@@ -161,15 +177,45 @@ account.
   [natiu-mqtt](https://github.com/soypat/natiu-mqtt), and Eclipse's own
   [paho.golang](https://github.com/eclipse-paho/paho.golang).
 
+## Observed on purifiers
+
+On 2026-11-22 the command's `discover` was run on a network with two purifiers, and
+heard both within its wait:
+
+- Each announces `_dyson_mqtt._tcp`, under an instance named by its product type and its
+  serial, joined by an underscore, as the reference implementations read it: one of type
+  475, one of type 527. The serials have the shape `Recognize` takes.
+- Each gives port 1883 and one IPv4 address.
+
+The same day the command's `status` was run with the sticker of the one of type 475,
+and no address:
+
+- The search took the purifier whose serial is the sticker's, at the address it gave.
+- Its broker took an MQTT 3.1 session under the serial and the credential made from the
+  sticker's password, and the subscription to what it says.
+- It answered both requests, for its state and for its sensors, and every field read
+  into this module's types: the fan on at speed 2 and turning, oscillation and night mode
+  off, monitoring on, the filter at 0 hours with the warning `FLTR`, a temperature of
+  19.5 °C, a humidity of 62 %, and 0 for particulates and for volatile compounds. The
+  temperature and the humidity are what the room was, which is what reading the
+  temperature as tenths of a kelvin gives.
+
+Then `speed 10` and `off` were run on it, found the same way: the fan went to its
+fastest and stopped, by the account of the person beside it. So a `STATE-SET` the
+broker takes is one the purifier obeys, for the fan's mode and its speed.
+
+Nothing was said to the one of type 527.
+
 ## Open questions
 
 - Whether the purifiers and the machine that runs the command are on one network. The
-  command takes an address, so mDNS need not pass.
+  search is mDNS, which does not leave a network; given an address, the command needs
+  none.
 
 ## Not verified
 
-- Nothing above was observed on a purifier, and the module was run against its own
-  stand-in only.
+- `on`, `auto`, `oscillate`, `night` and `timer`, `watch`, and what a purifier says
+  unasked: run against the module's own stand-in only.
 - Whether a TP02 takes a second connection while the Dyson app holds one.
 - What a purifier answers a change it refuses: the reference implementation waits for
   no answer.
