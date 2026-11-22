@@ -59,6 +59,32 @@ func TestHotCoolStatus(t *testing.T) {
 	if out, _, _ = run(t, fake, warm(), "status"); !strings.Contains(rows(out), "heat: on, not heating, to 20.9C") {
 		t.Errorf("status of a Hot+Cool at its target says\n%s", rows(out))
 	}
+
+	// A target is held to the tenth of a kelvin: the nearest it can hold to
+	// a whole degree, of either scale, is printed as that degree, and no
+	// other value is moved.
+	for held, want := range map[string]string{
+		"2942": "to 21.0C, 69.9F", // set to 21 degrees Celsius
+		"2859": "to 12.8C, 55.0F", // set to 55 degrees Fahrenheit
+		"2932": "to 20.0C, 68.0F", // set to 20 degrees Celsius, which is 68 Fahrenheit
+		"2943": "to 21.2C, 70.0F", // set to 70 degrees Fahrenheit
+		"2941": "to 21.0C, 69.7F", // as near 21 degrees Celsius as 2942 is
+		"2945": "to 21.4C, 70.4F", // near no whole degree
+	} {
+		fake.Product["hmax"] = held
+
+		if out, _, _ = run(t, fake, warm(), "status"); !strings.Contains(rows(out), want+"\n") {
+			t.Errorf("a target held as %s is printed in\n%s\nwant %q", held, rows(out), want)
+		}
+	}
+
+	// What a sensor reads was set by nobody: it is printed to the tenth, as
+	// it is.
+	fake.Sensors["tact"] = "2942"
+
+	if out, _, _ = run(t, fake, warm(), "status"); !strings.Contains(rows(out), "temperature: 21.1C, 69.9F\n") {
+		t.Errorf("a room at 2942 tenths of a kelvin is printed in\n%s", rows(out))
+	}
 }
 
 // TestHotCoolVariant: a variant of the type 527 is a Hot+Cool all the same:

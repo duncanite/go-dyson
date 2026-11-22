@@ -175,6 +175,12 @@ Wi-Fi sticker.
   36.85 °C. It is sent in tenths of a kelvin and bounded in them, so a purifier set in
   Fahrenheit, as one seen was, is given any whole degree of its own scale inside that.
   What a purifier itself takes at either end was not run.
+- **The command prints a target as the degree it was set to.** A purifier holds a target
+  to the tenth of a kelvin, which no whole degree of either scale is: 21 °C is held as
+  21.05, and 55 °F as 54.95. A target that is the nearest a purifier can hold to a whole
+  degree, within half a tenth of a kelvin, is printed as that degree, in whichever scale
+  it is one; any other, and every temperature a sensor reads, is printed to the tenth as
+  it is. The library's `Heat.Target` is the purifier's own value, unchanged.
 - **MQTT 3.1, as both implementations pin it**: libdyson-neon asks its library for
   `MQTTv31`, and [opendyson](https://github.com/libdyson-wg/opendyson) sets Paho's
   protocol version to 3. Whether a purifier takes MQTT 3.1.1 is not known.
@@ -336,8 +342,8 @@ Then the rest of its commands were run on it, in three turns, each read back by
 - `heat off`, `on`, `heat 21`: half a minute later the fan was on at speed 2 and
   turning, and the heater set to heat and heating, to 21.1 °C. A target of 21 °C is
   294.15 kelvin, halfway between two tenths: it is sent as 2942, which is 21.05 °C. Every
-  whole degree Celsius falls so, and is printed a tenth above what was asked
-  ([issue 25](https://github.com/duncanite/go-dyson/issues/25)).
+  whole degree Celsius falls so, and was then printed a tenth above what was asked; the
+  command has since printed such a target as the degree it was set to.
 - `auto`, `night off`, `timer 30m`: the fan was in auto and turning, night mode off, and
   the sleep timer at 29 minutes.
 - `timer off`, `night on`, `heat 12.78`, `heat off`, `on`, `speed 2`, `off`: the purifier
