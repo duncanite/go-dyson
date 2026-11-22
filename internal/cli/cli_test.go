@@ -85,8 +85,8 @@ func TestStatus(t *testing.T) {
 		"night mode: no",
 		"monitoring: yes",
 		"filter: 2159 hours left",
-		`error: "02C0"`,
-		`warning: "FLTR"`,
+		"error: 02C0",
+		"warning: FLTR",
 		"temperature: -",
 		"humidity: -",
 		"particulates: 0",
@@ -140,6 +140,58 @@ func TestActing(t *testing.T) {
 
 	if held := fake.Filters(); len(held) != 0 {
 		t.Errorf("after the commands the purifier still holds %v", held)
+	}
+}
+
+// TestAPurifiersWords: what a purifier says is shown and never obeyed: a
+// code with a line's end, an escape sequence and a direction mark in it is
+// written out, in the status and under watch, and forges no line of the
+// command's.
+func TestAPurifiersWords(t *testing.T) {
+	t.Parallel()
+
+	fake := started(t)
+	fake.Product["ercd"] = "02C0\ndyson: all is well\u202e\x1b[2J"
+
+	const shown = `02C0\ndyson: all is well\u202e\x1b[2J`
+
+	plain, _, _ := run(t, started(t), sticker(), "status")
+
+	said, errs, status := run(t, fake, sticker(), "status")
+	if status != cli.ExitOK || errs != "" || !strings.Contains(said, "error:") || !strings.Contains(said, shown) ||
+		strings.Count(said, "\n") != strings.Count(plain, "\n")+1 {
+		t.Errorf("status of a purifier with a hostile code exits %d, saying %q and\n%s", status, errs, said)
+	}
+
+	ctx, stop := context.WithCancel(t.Context())
+	defer stop()
+
+	var (
+		stdout out
+		stderr bytes.Buffer
+		ended  = make(chan int, 1)
+	)
+
+	env := sticker()
+
+	go func() {
+		ended <- cli.Run(ctx, []string{"--host", fake.Addr(), "watch"}, &stdout, &stderr,
+			func(name string) string { return env[name] })
+	}()
+
+	deadline := time.Now().Add(5 * time.Second)
+	for len(stdout.lines()) < 1 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+
+	stop()
+
+	if exit := <-ended; exit != cli.ExitOK {
+		t.Errorf("watch, told to stop, exits %d saying %q", exit, stderr.String())
+	}
+
+	if lines := stdout.lines(); len(lines) != 1 || !strings.Contains(lines[0], "error "+shown) {
+		t.Errorf("watch of a purifier with a hostile code printed %q", lines)
 	}
 }
 
