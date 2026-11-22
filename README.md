@@ -1,11 +1,14 @@
 # go-dyson
 
-A Go library and command for the Dyson Pure Cool Link purifier, the TP02, on the LAN: each
-purifier runs its own MQTT broker, and with the credential on its Wi-Fi sticker a client
-reads its state and its sensors there, and drives its fan. No cloud, and no account for a
-purifier that carries its sticker.
+A Go library and command for two Dyson purifiers on the LAN, the Pure Cool Link (TP02)
+and the Pure Hot+Cool (HP04 and its later variants): each purifier runs its own MQTT
+broker, and with the credential on its Wi-Fi sticker a client reads its state and its
+sensors there, and drives its fan and its heater. No cloud, and no account for a purifier
+that carries its sticker.
 Written against the reference implementation the open projects share. Its search, its
-reads and two of its commands have been run against a purifier; the rest has not:
+reads and some of its commands have been run against purifiers: the fan's speed and off
+on a Pure Cool Link, the speed, the oscillation and the heater's mode on a Pure
+Hot+Cool. The rest has not:
 [docs/design.md](docs/design.md) says what was read and what was seen.
 
 The command reads the purifier's sticker from the environment and takes it as no flag:
@@ -23,11 +26,13 @@ just dyson speed 4         # the fan on at a speed, 1 to 10
 just dyson oscillate on    # turn from side to side; off stops it
 just dyson night on        # the quiet, dimmed mode
 just dyson timer 2h        # turn itself off after a time; off ends the timer
+just dyson heat 21         # a Hot+Cool: heat to a temperature in Celsius; also on, off
 just dyson watch           # print what it says as it says it, until interrupted
 ```
 
 Each purifier has its own sticker and its own address: two purifiers are two
-environments. Only the Pure Cool Link's product type, 475, is spoken.
+environments. Two product types are spoken: 475, the Pure Cool Link, and 527, the Pure
+Hot+Cool.
 
 A purifier with no Wi-Fi sticker, as those made since about 2020, is named by three
 values in place of the sticker's two: `DYSON_SERIAL`, `DYSON_TYPE` and
