@@ -32,9 +32,38 @@ import (
 // Port is the port a purifier's broker listens on.
 const Port = "1883"
 
-// PureCoolLink is the product type of the TP02, the one this package
-// speaks.
-const PureCoolLink = "475"
+// The product types this package speaks.
+const (
+	// PureCoolLink is the TP02.
+	PureCoolLink = "475"
+	// PureHotCool is the HP04, of the generation after the Link's, and
+	// with a letter after it the HP07 and the HP09, which speak as it does.
+	PureHotCool = "527"
+)
+
+// generation is how a product type speaks: the names of its state's
+// fields and of its sensors', and whether it heats.
+type generation uint8
+
+const (
+	// link is the Link generation: the type 475.
+	link generation = iota + 1
+	// hotCool is the generation after it, with a heater: the type 527 and
+	// its variants.
+	hotCool
+)
+
+// generationOf is how a product type speaks, when this package speaks it.
+func generationOf(product string) (generation, bool) {
+	switch product {
+	case PureCoolLink:
+		return link, true
+	case PureHotCool, PureHotCool + "E", PureHotCool + "K", PureHotCool + "M":
+		return hotCool, true
+	default:
+		return 0, false
+	}
+}
 
 // The errors, to test with errors.Is. What the connection itself refuses
 // is package mqtt's: mqtt.ErrCredentials for a wrong credential,
@@ -130,14 +159,23 @@ type Purifier struct {
 	conn    *mqtt.Conn
 	said    *mqtt.Subscription
 	command string
+	speaks  generation
+
+	// swing is how the purifier last wrote its oscillation, preset the
+	// sweep it said it was set to, and low and high the angles it turns
+	// between: what the generation after the Link's has to be told back
+	// to turn. Empty until a state was read.
+	swing, preset, low, high string
 }
 
 // Dial connects to the purifier at host, an address with or without a
 // port, and subscribes to what it says. The purifier's broker counts its
 // connections and some models run out of them: Close the Purifier.
 func Dial(ctx context.Context, host string, identity Identity) (*Purifier, error) {
-	if identity.Type != PureCoolLink {
-		return nil, fmt.Errorf("%w: %q; it speaks %s, the Pure Cool Link", ErrUnsupported, identity.Type, PureCoolLink)
+	speaks, spoken := generationOf(identity.Type)
+	if !spoken {
+		return nil, fmt.Errorf("%w: %q; it speaks %s, the Pure Cool Link, and %s, the Pure Hot+Cool",
+			ErrUnsupported, identity.Type, PureCoolLink, PureHotCool)
 	}
 
 	if host == "" || identity.Serial == "" || identity.Credential == "" {
@@ -168,7 +206,7 @@ func Dial(ctx context.Context, host string, identity Identity) (*Purifier, error
 		return nil, fmt.Errorf("the purifier %s: %w", identity.Serial, err)
 	}
 
-	return &Purifier{conn: conn, said: said, command: topics + "/command"}, nil
+	return &Purifier{conn: conn, said: said, command: topics + "/command", speaks: speaks}, nil
 }
 
 // Close ends the connection.
@@ -244,14 +282,16 @@ func (p *Purifier) Next(ctx context.Context) (Update, error) {
 
 		switch heard.Message {
 		case currentState, stateChange:
-			state, err := heard.state()
+			state, err := heard.state(p.speaks)
 			if err != nil {
 				return Update{}, err
 			}
 
+			p.remember(&heard)
+
 			return Update{State: &state}, nil
 		case sensorData:
-			environment := heard.environment()
+			environment := heard.environment(p.speaks)
 
 			return Update{Environment: &environment}, nil
 		}

@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io"
 	"slices"
+	"strconv"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -52,6 +53,9 @@ const (
 	EnvAccountPassword = "DYSON_ACCOUNT_PASSWORD" // #nosec G101 -- the name of an environment variable, not a credential
 	EnvAccountCountry  = "DYSON_ACCOUNT_COUNTRY"
 )
+
+// wordOff is off, as it is typed and as it is printed.
+const wordOff = "off"
 
 // errUsage is a command line, or an environment, the command cannot act
 // on.
@@ -96,6 +100,7 @@ type rootCommand struct {
 	Oscillate oscillateCommand `cmd:"" help:"Have the purifier turn from side to side, or stop."`
 	Night     nightCommand     `cmd:"" help:"Set the quiet, dimmed night mode, or end it."`
 	Timer     timerCommand     `cmd:"" help:"Have the purifier turn itself off after a time."`
+	Heat      heatCommand      `cmd:"" help:"Have a Hot+Cool heat, or heat no more."`
 	Watch     watchCommand     `cmd:"" help:"Print what the purifier says as it says it, until interrupted."`
 
 	in       io.Reader
@@ -127,6 +132,9 @@ type (
 	timerCommand struct {
 		After string `arg:"" help:"How long from now, in hours and minutes: 90m, 2h. Nine hours at most. off ends the timer."`
 	}
+	heatCommand struct {
+		To string `arg:"" help:"A temperature in Celsius to heat to, 0.85 to 36.85; on, to heat to the temperature it has; off, to heat no more."`
+	}
 )
 
 // Run parses the arguments and runs the command.
@@ -146,12 +154,15 @@ func Run(ctx context.Context, env Environment) (status int) {
 		in: env.In, out: env.Out, err: env.Err, getenv: env.Getenv, network: env.Network, api: env.Account,
 	}
 
-	parser, err := kong.New(&root,
+	parser, err := kong.New(
+		&root,
 		kong.Name("dyson"),
-		kong.Description("Read and drive a Dyson Pure Cool Link purifier on the LAN. Its sticker is read from "+
-			EnvSSID+", the network name printed on it, and "+EnvPassword+", the password beside it. "+
-			"A purifier with no sticker is named by "+EnvSerial+", "+EnvType+" and "+EnvCredential+
-			", which the account command prints."),
+		kong.Description(
+			"Read and drive a Dyson Pure Cool Link or Pure Hot+Cool purifier on the LAN. Its sticker is read from "+
+				EnvSSID+", the network name printed on it, and "+EnvPassword+", the password beside it. "+
+				"A purifier with no sticker is named by "+EnvSerial+", "+EnvType+" and "+EnvCredential+
+				", which the account command prints.",
+		),
 		kong.UsageOnError(),
 		kong.Writers(env.Out, env.Err),
 		kong.Exit(func(code int) { panic(exitStatus(code)) }),
@@ -277,7 +288,9 @@ func (*statusCommand) Run(ctx context.Context, root *rootCommand) error {
 
 		table := tabwriter.NewWriter(root.out, 0, 0, 1, ' ', 0)
 
-		for _, line := range append(settings(&state), readings(&environment)...) {
+		later := root.later()
+
+		for _, line := range append(settings(&state, later), readings(&environment, later)...) {
 			terminal.Printf(table, "%s:\t%s\n", line[0], line[1])
 		}
 
@@ -289,9 +302,13 @@ func (*statusCommand) Run(ctx context.Context, root *rootCommand) error {
 	})
 }
 
+// later is whether the purifier is of the generation after the Link's,
+// which says other things of its filters and of the air.
+func (root *rootCommand) later() bool { return root.identity.Type != dyson.PureCoolLink }
+
 // settings is a state as lines of a name and a value.
-func settings(state *dyson.State) [][2]string {
-	mode := map[dyson.Mode]string{dyson.Off: "off", dyson.Fan: "on", dyson.Auto: "auto"}[state.Mode]
+func settings(state *dyson.State, later bool) [][2]string {
+	mode := map[dyson.Mode]string{dyson.Off: wordOff, dyson.Fan: "on", dyson.Auto: "auto"}[state.Mode]
 	if state.Speed > 0 {
 		mode += fmt.Sprintf(", speed %d", state.Speed)
 	}
@@ -301,7 +318,18 @@ func settings(state *dyson.State) [][2]string {
 		{"oscillating", yesNo(state.Oscillating)},
 		{"night mode", yesNo(state.NightMode)},
 		{"monitoring", yesNo(state.Monitoring)},
-		{"filter", fmt.Sprintf("%d hours left", int(state.FilterLife/time.Hour))},
+	}
+
+	if later {
+		lines = append(lines, [2]string{
+			"filters", "HEPA " + number(state.HEPA, "%") + " left, carbon " + number(state.Carbon, "%") + " left",
+		})
+	} else {
+		lines = append(lines, [2]string{"filter", fmt.Sprintf("%d hours left", int(state.FilterLife/time.Hour))})
+	}
+
+	if state.Heat != nil {
+		lines = append(lines, [2]string{"heat", heating(state.Heat)})
 	}
 
 	// The codes are the purifier's own text.
@@ -316,21 +344,56 @@ func settings(state *dyson.State) [][2]string {
 	return lines
 }
 
+// heating is a heater in a few words: whether it is set to heat, whether
+// it heats now, and to what.
+func heating(heat *dyson.Heat) string {
+	said := wordOff
+
+	switch {
+	case heat.On && heat.Heating:
+		said = "on, heating"
+	case heat.On:
+		said = "on, not heating"
+	}
+
+	if heat.Target != nil {
+		said += ", to " + degrees(*heat.Target)
+	}
+
+	return said
+}
+
+// degrees is a temperature in Celsius, written in both scales.
+func degrees(celsius float64) string {
+	return fmt.Sprintf("%.1fC, %.1fF", celsius, celsius*9/5+32)
+}
+
 // readings is the sensors as lines of a name and a value, a dash for a
 // sensor that reads nothing.
-func readings(environment *dyson.Environment) [][2]string {
+func readings(environment *dyson.Environment, later bool) [][2]string {
 	temperature := "-"
 
 	if environment.Temperature != nil {
-		celsius := *environment.Temperature
-		temperature = fmt.Sprintf("%.1fC, %.1fF", celsius, celsius*9/5+32)
+		temperature = degrees(*environment.Temperature)
 	}
 
 	lines := [][2]string{
 		{"temperature", temperature},
 		{"humidity", number(environment.Humidity, "%")},
-		{"particulates", number(environment.Particulates, "")},
-		{"volatile compounds", number(environment.VOC, "")},
+	}
+
+	if later {
+		lines = append(lines,
+			[2]string{"PM2.5", number(environment.PM25, " ug/m3")},
+			[2]string{"PM10", number(environment.PM10, " ug/m3")},
+			[2]string{"volatile compounds", index(environment.VOCIndex)},
+			[2]string{"nitrogen dioxide", index(environment.NO2Index)},
+		)
+	} else {
+		lines = append(lines,
+			[2]string{"particulates", number(environment.Particulates, "")},
+			[2]string{"volatile compounds", number(environment.VOC, "")},
+		)
 	}
 
 	if environment.SleepTimer > 0 {
@@ -338,6 +401,15 @@ func readings(environment *dyson.Environment) [][2]string {
 	}
 
 	return lines
+}
+
+// index is an index of the air, to the tenth; a dash for none.
+func index(value *float64) string {
+	if value == nil {
+		return "-"
+	}
+
+	return fmt.Sprintf("%.1f", *value)
 }
 
 func number(value *int, unit string) string {
@@ -395,7 +467,7 @@ func (cmd *nightCommand) Run(ctx context.Context, root *rootCommand) error {
 func (cmd *timerCommand) Run(ctx context.Context, root *rootCommand) error {
 	var after time.Duration
 
-	if cmd.After != "off" {
+	if cmd.After != wordOff {
 		asked, err := time.ParseDuration(cmd.After)
 		if err != nil || asked <= 0 {
 			return fmt.Errorf("%w: %q is neither a time as 90m or 2h, nor off", errUsage, cmd.After)
@@ -409,6 +481,23 @@ func (cmd *timerCommand) Run(ctx context.Context, root *rootCommand) error {
 	})
 }
 
+func (cmd *heatCommand) Run(ctx context.Context, root *rootCommand) error {
+	if cmd.To == "on" || cmd.To == wordOff {
+		return root.with(ctx, func(ctx context.Context, purifier *dyson.Purifier) error {
+			return purifier.SetHeat(ctx, cmd.To == "on")
+		})
+	}
+
+	celsius, err := strconv.ParseFloat(cmd.To, 64)
+	if err != nil {
+		return fmt.Errorf("%w: %q is neither a temperature in Celsius, nor on, nor off", errUsage, cmd.To)
+	}
+
+	return root.with(ctx, func(ctx context.Context, purifier *dyson.Purifier) error {
+		return purifier.SetHeatTarget(ctx, celsius)
+	})
+}
+
 // Run prints what the purifier says, one line each, until the context is
 // done, which is how the command is told to stop.
 func (*watchCommand) Run(ctx context.Context, root *rootCommand) error {
@@ -419,7 +508,7 @@ func (*watchCommand) Run(ctx context.Context, root *rootCommand) error {
 		update := dyson.Update{State: &state}
 
 		for err == nil {
-			terminal.Printf(root.out, "%s  %s\n", time.Now().Format(time.TimeOnly), line(update))
+			terminal.Printf(root.out, "%s  %s\n", time.Now().Format(time.TimeOnly), line(update, root.later()))
 
 			update, err = purifier.Next(ctx)
 		}
@@ -433,15 +522,15 @@ func (*watchCommand) Run(ctx context.Context, root *rootCommand) error {
 }
 
 // line is what the purifier said, in one line.
-func line(update dyson.Update) string {
+func line(update dyson.Update, later bool) string {
 	var fields [][2]string
 
 	if update.State != nil {
-		fields = settings(update.State)
+		fields = settings(update.State, later)
 	}
 
 	if update.Environment != nil {
-		fields = readings(update.Environment)
+		fields = readings(update.Environment, later)
 	}
 
 	said := make([]string, 0, len(fields))

@@ -2,8 +2,9 @@
 
 Research into Dyson connected air purifiers, done on 2026-11-15 from public sources, and
 the module built from it. The module follows the reference implementation's code. Its
-search, its reads and two of its commands have been run against purifiers, as [Observed
-on purifiers](#observed-on-purifiers) says.
+search, its reads and some of its commands have been run against purifiers, as [Observed
+on purifiers](#observed-on-purifiers) says, and [Not verified](#not-verified) what has
+not.
 
 In short: each purifier runs its own MQTT broker on the LAN, and with the purifier's
 credential a client reads its sensors and drives it there, with no cloud at run time. The
@@ -81,15 +82,17 @@ The earlier generations have none, and no HomeKit.
 ## What this module is
 
 **A client of the purifier's own broker**, for the Pure Cool Link, the TP02, product type
-475: the purifiers it was written for, which carry their Wi-Fi stickers. Local, with no
-account.
+475, and for the Pure Hot+Cool of the generation after it, product type 527: the
+purifiers it was written for. Local, with no account for a purifier that carries its
+Wi-Fi sticker.
 
 - `dyson`: `FromSticker` makes a purifier's identity from the network name and the
   password on its sticker. `Recognize` and `Find` say what a purifier is on the network.
   `Dial` connects; `State` and `Environment` ask for how it is
   set and what its sensors read; `Next` reads what it says as it says it; `SetMode`,
-  `SetSpeed`, `SetOscillation`, `SetNightMode` and `SetSleepTimer` drive it; `Done` and
-  `Err` say when the connection ended, and why.
+  `SetSpeed`, `SetOscillation`, `SetNightMode` and `SetSleepTimer` drive it, `SetHeat`
+  and `SetHeatTarget` a Hot+Cool's heater; `Done` and `Err` say when the connection
+  ended, and why.
 - `dyson/account`: the identity of each purifier of a Dyson account, fetched with a
   login by a one-time code: what a sticker would have given, for a purifier that has
   none. `dyson/account/accounttest` is the account API for tests.
@@ -137,6 +140,41 @@ account.
   generation was read, `dyson_pure_cool_link.py`: its state is `fmod`, `fnst`, `fnsp`,
   `oson`, `nmod`, `rhtm`, `filf`. Later generations name their state otherwise; another
   type is refused, with nothing sent.
+- **Two generations are spoken, by their product type.** The Link's, the type 475, as
+  the reference implementation's `dyson_pure_cool_link.py` reads it: its state is `fmod`,
+  `fnst`, `fnsp`, `oson`, `nmod`, `rhtm`, `filf`. And the generation after it with a
+  heater, the type 527 and its variants 527E, 527K and 527M, which the reference speaks
+  to as one, as its
+  [`dyson_pure_cool.py`](https://github.com/libdyson-wg/libdyson-neon/blob/28063efd190c690e624f96bc214b6fc2dd4c6489/libdyson/dyson_pure_cool.py)
+  and the heating device of its
+  [`dyson_device.py`](https://github.com/libdyson-wg/libdyson-neon/blob/28063efd190c690e624f96bc214b6fc2dd4c6489/libdyson/dyson_device.py)
+  read it: a power `fpwr` and an auto mode `auto` where the Link has one mode; two
+  filters in percent, `hflr` and `cflr`; the heater's `hmod`, `hsta` and `hmax`; the
+  particulates as `p25r` or `pm25` and `p10r` or `pm10`, and two indices in tenths,
+  `va10` and `noxl`. Another type is refused, with nothing sent: the type 438, the Pure
+  Cool of that same generation, is the same reading with no heater, and is not spoken
+  because none was there to run it against.
+- **One `State` for both.** `Mode` is the Link's own word, and the later generation's
+  power and auto mode read into it: off, on, or on and left to the purifier. What only
+  one generation says is a field the other leaves at nothing: the Link's hours of
+  filter, the later one's two percentages and its heater. `Environment` likewise: each
+  generation's own readings of the air, under their own names, since the Link's indices
+  and the later one's micrograms are not the same measure.
+- **`SetMode(Auto)` on the later generation sends the power with the auto mode.** The
+  reference sends the auto mode alone; what a purifier that is off then does was not
+  read, and auto is the fan run by the purifier, which is a fan that is on.
+- **The later generation is told to turn in its own words.** By its firmware it writes
+  its oscillation as `ON` and `OFF` or as `OION` and `OIOF`, and the reference tells it
+  to turn in whichever it wrote, with its fan on and the angles it last said, `osal` and
+  `osau`. So a `Purifier` keeps those from the last state it read, and `SetOscillation`
+  asks for a state first when it has read none. The reference sends the sweep, `ancp`,
+  as `CUST` every time; a purifier was seen to say a sweep of its own there, `0180`, and
+  this module says back whatever it last said, so that turning changes nothing of how
+  it turns.
+- **The heater's target is 274 to 310 kelvin, as the reference takes it**: 0.85 to
+  36.85 °C. It is sent in tenths of a kelvin and bounded in them, so a purifier set in
+  Fahrenheit, as one seen was, is given any whole degree of its own scale inside that.
+  What a purifier itself takes at either end was not run.
 - **MQTT 3.1, as both implementations pin it**: libdyson-neon asks its library for
   `MQTTv31`, and [opendyson](https://github.com/libdyson-wg/opendyson) sets Paho's
   protocol version to 3. Whether a purifier takes MQTT 3.1.1 is not known.
@@ -182,7 +220,8 @@ account.
   adds who may be sent it and not how it is sent; a network nobody else is on is what
   both rest on.
 - **Not built**: the other product types, the air quality target, the monitoring switch,
-  resetting the filter, heat; the account API of mainland China, which is another host
+  resetting the filter; for the later generation, its oscillation's angles, its airflow's
+  direction and its focus mode; the account API of mainland China, which is another host
   and logs in by a telephone number.
 
 ### MQTT, and the library under it
@@ -237,7 +276,7 @@ Then `speed 10` and `off` were run on it, found the same way: the fan went to it
 fastest and stopped, by the account of the person beside it. So a `STATE-SET` the
 broker takes is one the purifier obeys, for the fan's mode and its speed.
 
-Nothing was said to the one of type 527.
+Nothing had yet been said to the one of type 527.
 
 The same day the command's `account` was run once against the account those two
 purifiers are registered to: Dyson's API took the login as `dyson/account` makes it, the
@@ -246,6 +285,50 @@ serial and a credential that decrypted. `status` was then run with the three val
 list gave for the purifier of type 475, in place of its sticker: its broker took them,
 and its state and sensors were read as before. So the credential the account gives is
 the one the sticker gives.
+
+Then `status` was run on the purifier of type 527, with the three values the account's
+list gave for it and no address: the search found it, its broker took the credential,
+and its state and its sensors were read, every field into this module's types:
+
+- The fan off, with a speed of 2 kept, and still; oscillation off, night mode on,
+  monitoring on.
+- Both filters at 23 %.
+- The heater off, with a target of 12.8 °C, which is 55 °F.
+- An error code, `11E1`, which the purifier gave with nothing else amiss to see. What it
+  means is not known.
+- A temperature of 18.1 °C and a humidity of 65 %, the room's.
+- Both particulate readings at 999, with the fan off.
+- The volatile compounds at 0.5 and the nitrogen dioxide at 0.0.
+
+Then `speed 2` was run on it and `status` a minute later: the fan was on at speed 2 and
+turning, so the later generation takes its speed as this module sends it. Both
+particulate readings were still 999, with the fan on.
+
+Its two answers were then read whole, as it sent them:
+
+- The particulates come under both names at once, and do not agree: `p25r` and `p10r`
+  were `0999`, `pm25` and `pm10` `0149`. This module reads `p25r` and `p10r` first, as
+  the reference does, so the 999 is the purifier's own word and not a field misread. 999
+  is the top of the range
+  [hass-dyson](https://github.com/cmgrayb/hass-dyson/blob/main/docs/SENSORS.md) accepts
+  for these readings, and
+  [ioBroker's adapter](https://github.com/Grizzelbee/ioBroker.dysonairpurifier) took
+  to the `r` names because they are what Dyson's app shows; whether 999 is a sensor at
+  the end of its scale, or one that reads nothing, is not known, and neither is what
+  the error `11E1` says.
+- This purifier writes its oscillation as `ON` and `OFF`, with a sweep `ancp` of `0180`
+  where the reference's recorded state has `CUST`, and angles of `0135` and `0225`.
+- The state also names each filter's kind, `cflt` and `hflt`, and holds the sleep timer,
+  `sltm`, which the sensors' answer holds too. Neither kind is read.
+
+Then `oscillate on` and `oscillate off` were run on it: it turned, and it stopped, by
+the account of the person beside it. It was told to turn in its own words, `ON`, with
+the sweep and the angles it had said.
+
+Last, `heat on` was run on it, and `status` after: the heater was set to heat and was
+not heating, its target of 12.8 °C being under the room's 18.2 °C, and the fan was
+still off. So the purifier takes the heater's mode as this module sends it, and says
+apart what it is set to and what it does.
 
 ## Open questions
 
@@ -259,8 +342,12 @@ the one the sticker gives.
   unasked: run against the module's own stand-in only.
 - What the account's API answers when it refuses, a code asked for too often among it:
   read off the reference implementation, and run against a stand-in of the API only.
-  The credential the account gives for the purifier of type 527 was not tried: this
-  module does not speak that type yet.
+- The commands that change a purifier of type 527, but its speed, its oscillation and its
+  heater set to heat: its mode, its night mode, its timer, its heater set to heat no
+  more or to a target, and a heater that does heat; and what one says unasked. Read off
+  the reference implementation, and run against the module's own stand-in only.
+- What a particulate reading of 999 is, and what the error `11E1` is: see [Observed on
+  purifiers](#observed-on-purifiers).
 - Whether a TP02 takes a second connection while the Dyson app holds one.
 - What a purifier answers a change it refuses: the reference implementation waits for
   no answer.
