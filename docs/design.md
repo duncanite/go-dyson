@@ -13,8 +13,11 @@ implementation takes, one of them in Go.
 ## The device
 
 A purifier is a Wi-Fi client that runs an MQTT broker and announces it over mDNS as
-`_dyson_mqtt._tcp`, its instance named by product type and serial
-([opendyson](https://github.com/libdyson-wg/opendyson)). The same topics are reachable
+`_dyson_mqtt._tcp`, its instance named by product type and serial, `475_<serial>`
+([libdyson-neon's discovery](https://github.com/libdyson-wg/libdyson-neon/blob/28063efd190c690e624f96bc214b6fc2dd4c6489/libdyson/discovery.py)
+and [its test](https://github.com/libdyson-wg/libdyson-neon/blob/28063efd190c690e624f96bc214b6fc2dd4c6489/tests/test_discovery.py);
+[opendyson's scan](https://github.com/libdyson-wg/opendyson/blob/04524be34f052531799c63bf2139847b63582359/internal/lan/scan.go)
+reads the same name). The same topics are reachable
 through Dyson's cloud, which is how the phone app reaches a purifier from outside.
 
 ## Ways in
@@ -81,7 +84,8 @@ The earlier generations have none, and no HomeKit.
 account.
 
 - `dyson`: `FromSticker` makes a purifier's identity from the network name and the
-  password on its sticker. `Dial` connects; `State` and `Environment` ask for how it is
+  password on its sticker. `Recognize` and `Find` say what a purifier is on the network.
+  `Dial` connects; `State` and `Environment` ask for how it is
   set and what its sensors read; `Next` reads what it says as it says it; `SetMode`,
   `SetSpeed`, `SetOscillation`, `SetNightMode` and `SetSleepTimer` drive it.
 - `mqtt`: an MQTT client of this module's own design, and `mqtt/mqtttest`, a broker for
@@ -109,9 +113,16 @@ account.
 - **A change returns when the broker took it**, at quality of service 1, as the
   reference implementation publishes it. What the purifier then does, it says, and
   `Next` reads.
-- **Not built**: finding purifiers by mDNS (`_dyson_mqtt._tcp`), the other product
-  types, the account route, the air quality target, the monitoring switch, resetting the
-  filter, heat.
+- **The library says what a purifier is on the network, and opens no socket to look.**
+  `Service` is what a purifier announces, and `Recognize` reads an instance's name into
+  the serial and the product type its sticker gives, on a value, with no mDNS library
+  behind it. `Find` searches through a `Browser` its caller lends, an interface of this
+  package in standard types: mDNS's port is one to a host, and belongs to the program. An
+  announcement proves nothing and carries no secret: the credential stays the sticker's.
+  No TXT entry is read, since neither implementation reads one.
+- **Not built**: the search itself, in the command, which still takes an address; the
+  other product types, the account route, the air quality target, the monitoring switch,
+  resetting the filter, heat.
 
 ### MQTT, and the library under it
 
