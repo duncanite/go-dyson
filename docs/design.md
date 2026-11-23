@@ -154,7 +154,9 @@ Wi-Fi sticker.
   particulates as `p25r` or `pm25` and `p10r` or `pm10`, and two indices in tenths,
   `va10` and `noxl`. Another type is refused, with nothing sent: the type 438, the Pure
   Cool of that same generation, is the same reading with no heater, and is not spoken
-  because none was there to run it against.
+  because none was there to run it against. `Speaks` says whether
+  a type is one of them, so that a consumer refuses a setting it cannot use without
+  dialling, and without a list of its own to keep in step.
 - **One `State` for both.** `Mode` is the Link's own word, and the later generation's
   power and auto mode read into it: off, on, or on and left to the purifier. What only
   one generation says is a field the other leaves at nothing: the Link's hours of

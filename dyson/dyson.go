@@ -67,6 +67,15 @@ func generationOf(product string) (generation, bool) {
 	}
 }
 
+// Speaks says whether a product type is one this package speaks: a type
+// Dial takes, where it refuses any other as ErrUnsupported. It is what a
+// purifier announces and what its sticker carries.
+func Speaks(product string) bool {
+	_, spoken := generationOf(product)
+
+	return spoken
+}
+
 // The errors, to test with errors.Is. What the connection itself refuses
 // is package mqtt's: mqtt.ErrCredentials for a wrong credential,
 // mqtt.ErrLost when the purifier goes.
