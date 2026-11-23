@@ -380,8 +380,21 @@ func TestWholeOfWhatIsNotRead(t *testing.T) {
 		t.Fatal("watch --whole went on past a message it cannot read")
 	}
 
-	if lines := stdout.lines(); len(lines) != 3 || !strings.HasSuffix(lines[2], `  not JSON\x1b[2J at all`) {
-		t.Errorf("watch --whole of what is no JSON printed %q", lines)
+	// The last line is what could not be read. Before it come the two
+	// answers the watch asked for, and whatever else the purifier said
+	// meanwhile: an answer to the command before, which left without
+	// reading it, is said to whoever listens now.
+	lines := stdout.lines()
+	if len(lines) < 3 || !strings.HasSuffix(lines[len(lines)-1], `  not JSON\x1b[2J at all`) {
+		t.Fatalf("watch --whole of what is no JSON printed %q", lines)
+	}
+
+	for _, line := range lines[:len(lines)-1] {
+		var message map[string]json.RawMessage
+
+		if _, document, _ := strings.Cut(line, "  "); json.Unmarshal([]byte(document), &message) != nil {
+			t.Errorf("watch --whole printed, before what it could not read, %q", line)
+		}
 	}
 }
 
