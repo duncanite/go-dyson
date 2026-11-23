@@ -142,7 +142,7 @@ type (
 		After string `arg:"" help:"How long from now, in hours and minutes: 90m, 2h. Nine hours at most. off ends the timer."`
 	}
 	heatCommand struct {
-		To string `arg:"" help:"A temperature in Celsius to heat to, 0.85 to 36.85; on, to heat to the temperature it has; off, to heat no more."`
+		To string `arg:"" help:"A temperature in Celsius to heat to, 0.8 to 36.8; on, to heat to the temperature it has; off, to heat no more."`
 	}
 )
 
@@ -461,16 +461,17 @@ func heating(heat *dyson.Heat) string {
 	}
 
 	if heat.Target != nil {
-		said += ", to " + aimed(*heat.Target)
+		said += ", to " + aimed(*heat.Target+dyson.TargetHeld)
 	}
 
 	return said
 }
 
-// aimed is a heater's target, in Celsius, written in both scales. A
-// purifier holds a target to the tenth of a kelvin, which no whole degree
-// of either scale is: a target that is the nearest it can hold to a whole
-// degree is written as that degree, the one it was set to.
+// aimed is the temperature a heater holds as its target, in Celsius,
+// written in both scales. A purifier holds a target to the tenth of a
+// kelvin, which no whole degree of either scale is: a target that is the
+// nearest it can hold to a whole degree is written as that degree, the one
+// it was set to.
 func aimed(celsius float64) string {
 	// Half a tenth of a kelvin, in each scale.
 	const reachCelsius, reachFahrenheit = 0.05, 0.09

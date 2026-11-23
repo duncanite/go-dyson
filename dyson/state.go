@@ -23,14 +23,21 @@ const (
 )
 
 // The fan's speeds, the longest sleep timer, and the temperatures a
-// heater is set to, in Celsius: 274 and 310 kelvin.
+// heater is set to, in Celsius as Heat.Target gives them: 274 and 310
+// kelvin.
 const (
 	MinSpeed      = 1
 	MaxSpeed      = 10
 	MaxSleepTimer = 540 * time.Minute
-	MinHeatTarget = 0.85
-	MaxHeatTarget = 36.85
+	MinHeatTarget = 0.8
+	MaxHeatTarget = 36.8
 )
+
+// TargetHeld is how far above Heat.Target the temperature a purifier
+// holds is, in Celsius. A purifier holds a target in tenths of a kelvin,
+// which fall halfway between two tenths of a degree Celsius: Target is the
+// tenth below, so that a target set is the target read back.
+const TargetHeld = 0.05
 
 // State is how a purifier is set and what it is doing.
 type State struct {
@@ -69,8 +76,10 @@ type Heat struct {
 	// heats now: set to heat, it stops when the room is at its target.
 	On      bool
 	Heating bool
-	// Target is the temperature it heats to, in Celsius; nil when the
-	// purifier did not say.
+	// Target is the temperature it heats to, in Celsius, to the tenth of
+	// a degree: what SetHeatTarget was given, when it was given a tenth.
+	// The purifier holds TargetHeld above it. Nil when the purifier did
+	// not say.
 	Target *float64
 }
 
@@ -203,8 +212,8 @@ func (r *report) heat() *Heat {
 	heat := &Heat{On: mode == wordHeat, Heating: field(r.Product, "hsta") == wordHeat}
 
 	if tenths := reading(r.Product, "hmax"); tenths != nil {
-		celsius := celsius(*tenths)
-		heat.Target = &celsius
+		target := float64(*tenths-aboveFreezing) / perUnit
+		heat.Target = &target
 	}
 
 	return heat
@@ -215,6 +224,9 @@ func (r *report) heat() *Heat {
 const (
 	perUnit  = 10.0
 	freezing = 273.15
+	// aboveFreezing is the tenth of a kelvin a heat target of zero
+	// Celsius is written as: 273.15 kelvin, taken up to the tenth.
+	aboveFreezing = 2732
 )
 
 func celsius(tenths int) float64 { return float64(tenths)/perUnit - freezing }
@@ -486,8 +498,11 @@ func (p *Purifier) SetHeat(ctx context.Context, on bool) error {
 }
 
 // SetHeatTarget sets a Hot+Cool to heat to a temperature in Celsius,
-// MinHeatTarget to MaxHeatTarget, sent to the tenth of a degree. A
-// purifier with no heater is ErrUnsupported, and nothing is sent.
+// MinHeatTarget to MaxHeatTarget. A tenth of a degree is read back as it
+// was set, in Heat.Target; anything finer is sent as the tenth of a
+// kelvin nearest to it, which is how a purifier set in Fahrenheit holds a
+// whole degree of its own. A purifier with no heater is ErrUnsupported,
+// and nothing is sent.
 func (p *Purifier) SetHeatTarget(ctx context.Context, celsius float64) error {
 	if p.speaks != hotCool {
 		return fmt.Errorf("%w: it has no heater", ErrUnsupported)
@@ -498,7 +513,13 @@ func (p *Purifier) SetHeatTarget(ctx context.Context, celsius float64) error {
 	// every range, and compares as inside none.
 	const lowest, highest = 2740, 3100
 
-	tenths := math.Round((celsius + freezing) * perUnit)
+	// The nearest tenth of a kelvin, a tie going up: a tenth of a degree
+	// Celsius is always a tie, and is sent as the tenth of a kelvin that
+	// reads back as itself. The slack keeps what arithmetic left a hair
+	// under a tenth from being sent a tenth down.
+	const slack = 1e-6
+
+	tenths := math.Floor(celsius*perUnit + aboveFreezing + slack)
 	if !(tenths >= lowest && tenths <= highest) {
 		return fmt.Errorf("%w: a heat target of %g, outside %g to %g Celsius",
 			ErrArgument, celsius, MinHeatTarget, MaxHeatTarget)
