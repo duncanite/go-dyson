@@ -277,6 +277,17 @@ func (r *report) environment(speaks generation) Environment {
 // remember keeps how a state wrote the oscillation and its angles, for
 // SetOscillation to say back.
 func (p *Purifier) remember(heard *report) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	// Whatever the state holds: one that writes no oscillation has said
+	// all there is to learn, and the purifier is told in the usual words.
+	if !p.knows {
+		p.knows = true
+
+		close(p.told)
+	}
+
 	if swing := field(heard.Product, fieldSwing); swing != "" {
 		p.swing = swing
 	}
@@ -347,22 +358,25 @@ func (p *Purifier) SetSpeed(ctx context.Context, speed int) error {
 //
 // The generation after the Link's is told to turn in the words it last
 // wrote its oscillation in, with the sweep and the angles it last said it
-// turns between, and its fan on. When it has said no state on this connection
-// yet, SetOscillation first asks for one, as State does, passing over what
-// the purifier says meanwhile.
+// turns between, and its fan on. When it has said no state on this
+// connection yet, SetOscillation first asks for one and waits for it: read
+// by the goroutine that is in Next when there is one, and by itself
+// otherwise, in which case what it read is Next's to give all the same.
 func (p *Purifier) SetOscillation(ctx context.Context, turning bool) error {
 	if p.speaks == link {
 		return p.send(ctx, setState, map[string]string{fieldSwing: word(turning)})
 	}
 
-	if p.swing == "" {
-		if _, err := p.State(ctx); err != nil {
-			return err
-		}
+	if err := p.learn(ctx); err != nil {
+		return err
 	}
 
+	p.mu.Lock()
+	swing, preset, low, high := p.swing, p.preset, p.low, p.high
+	p.mu.Unlock()
+
 	swinging, still := wordOn, wordOff
-	if p.swing == wordSwinging || p.swing == wordStill {
+	if swing == wordSwinging || swing == wordStill {
 		swinging, still = wordSwinging, wordStill
 	}
 
@@ -375,15 +389,67 @@ func (p *Purifier) SetOscillation(ctx context.Context, turning bool) error {
 	// The sweep is said back as the purifier last said it, so that turning
 	// changes nothing of how it turns; one that said none is given its
 	// angles as its own, as the reference implementation does.
-	if p.low != "" && p.high != "" {
-		turn["ancp"], turn["osal"], turn["osau"] = "CUST", p.low, p.high
+	if low != "" && high != "" {
+		turn["ancp"], turn["osal"], turn["osau"] = "CUST", low, high
 
-		if p.preset != "" {
-			turn["ancp"] = p.preset
+		if preset != "" {
+			turn["ancp"] = preset
 		}
 	}
 
 	return p.send(ctx, setState, turn)
+}
+
+// learn returns once a state has been read, which says how the purifier
+// writes its oscillation, asking for one when none has. Whoever is in Next
+// reads it; with nobody there, learn reads, and keeps what it read for
+// Next.
+func (p *Purifier) learn(ctx context.Context) error {
+	select {
+	case <-p.told:
+		return nil
+	default:
+	}
+
+	if err := p.send(ctx, askState, nil); err != nil {
+		return err
+	}
+
+	for {
+		select {
+		case <-p.told:
+			return nil
+		case <-ctx.Done():
+			return fmt.Errorf("the purifier: waiting for its state: %w", context.Cause(ctx))
+		case p.reading <- struct{}{}:
+		}
+
+		// The state may have come as the turn to read was taken: there
+		// is then nothing to wait for.
+		select {
+		case <-p.told:
+			<-p.reading
+
+			return nil
+		default:
+		}
+
+		update, err := p.read(ctx)
+
+		// What was read is kept; a wait that ended with nothing read is
+		// this call's alone.
+		if err == nil || update.Whole != nil {
+			p.mu.Lock()
+			p.kept = append(p.kept, saying{update: update, err: err})
+			p.mu.Unlock()
+		}
+
+		<-p.reading
+
+		if err != nil && update.Whole == nil {
+			return err
+		}
+	}
 }
 
 // SetNightMode sets the quiet, dimmed mode, or ends it.

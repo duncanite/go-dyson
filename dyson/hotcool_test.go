@@ -227,6 +227,9 @@ func TestHotCoolSetting(t *testing.T) {
 		}
 	}
 
+	// What SetOscillation read to learn how the purifier stands is Next's
+	// to give all the same, before the change that followed.
+	said("it was asked how it stands")
 	said("it was told to turn")
 
 	for _, step := range []struct {
@@ -304,6 +307,21 @@ func TestHotCoolSetting(t *testing.T) {
 			"oson": "ON", "fpwr": "ON", "ancp": "0180", "osal": "0063", "osau": "0243",
 		}) || !reflect.DeepEqual(sent[1].Data, map[string]string{"oson": "OFF"}) {
 		t.Errorf("turning and stopping a purifier that writes ON and OFF sent %+v", sent)
+	}
+
+	// A purifier whose state writes no oscillation at all is told in the
+	// usual words, once it has said that state: the setting does not wait
+	// for a word that will not come.
+	wordless, quiet := hotCool(t)
+	delete(wordless.Product, "oson")
+
+	if err := quiet.SetOscillation(ctx, true); err != nil {
+		t.Fatalf("SetOscillation of a purifier that writes no oscillation: %v", err)
+	}
+
+	if asked := wordless.Received(); len(asked) != 2 || asked[0].Message != "REQUEST-CURRENT-STATE" ||
+		asked[1].Data["oson"] != "ON" {
+		t.Errorf("turning a purifier that writes no oscillation sent %+v", asked)
 	}
 
 	sent := len(fake.Received())
