@@ -5,7 +5,7 @@ go 1.26.0
 require (
 	github.com/alecthomas/kong v1.17.0
 	github.com/eclipse/paho.mqtt.golang v1.5.2
-	github.com/forkcloser/go-mdns v0.0.0-20261116031615-ee1ffba2ede5
+	github.com/forkcloser/go-mdns v0.0.0-20261127070345-46e5d3af6e39
 	github.com/mycophonic/primordium v0.15.1
 )
 
