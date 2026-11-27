@@ -10,8 +10,8 @@ github.com/eclipse/paho.mqtt.golang v1.5.2 h1:4pcXsR3nR9gJuHCpBC8UF6rTehpIoHrYRm
 github.com/eclipse/paho.mqtt.golang v1.5.2/go.mod h1:rDbBdvBJ0K2cDnnazZcu0/cu7y3bFiICNVUOUWHnOOg=
 github.com/forkcloser/blake3 v1.1.0 h1:E0tWTfoLiGurJrwvBcrrkiy1iAE80SX4WHx0BSyUOR8=
 github.com/forkcloser/blake3 v1.1.0/go.mod h1:BLJuiWNe+8WVt0HUpv4WA/Dc/QXXg9WvENESubhOuGQ=
-github.com/forkcloser/go-mdns v0.0.0-20261127070345-46e5d3af6e39 h1:4Nb+oLsDnp8gcD8a/M5kEFdo+g10qlILVV8otvB1GSA=
-github.com/forkcloser/go-mdns v0.0.0-20261127070345-46e5d3af6e39/go.mod h1:ptLY3Wyxil+mWT1uekRjQkEYO5OXbIwSnr4hUpr4zdE=
+github.com/forkcloser/go-mdns v0.0.0-20261127084458-51c914647b2a h1:HGRafCBzaiNdbaAdahnQVfQoYHnL67X17fDy1QutNzE=
+github.com/forkcloser/go-mdns v0.0.0-20261127084458-51c914647b2a/go.mod h1:9AhtFxqTcLkFGJdwyraNEvb5LqxUBocHUEebju8i9UM=
 github.com/forkcloser/xos v0.1.0 h1:0vfH2xxdCCDv6x7mYvnQ74zTElzb3wce+0wL+782HtE=
 github.com/forkcloser/xos v0.1.0/go.mod h1:XD7TJl5GzHaZbCBDKby6zDS9zQ+R6DAWclFskmRjAco=
 github.com/getsentry/sentry-go v0.50.0 h1:gkO59rn/i0RCAXUUTflC5QVbTQGPXbaFabs2olVzc9g=
